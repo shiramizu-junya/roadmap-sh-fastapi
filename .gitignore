@@ -1,0 +1,10 @@
+# Python / uv
+.venv/
+__pycache__/
+*.py[cod]
+
+# 環境変数（P2 で作る。秘密情報を含むためコミットしない）
+.env
+
+# macOS
+.DS_Store
