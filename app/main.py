@@ -1,7 +1,7 @@
 from typing import Annotated
 
 from fastapi import FastAPI, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 
 app = FastAPI()
 
@@ -9,8 +9,16 @@ app = FastAPI()
 class TodoCreate(BaseModel):
     """クライアントから受け取る形。id はサーバが決めるので含めない"""
 
-    title: str
+    title: str = Field(min_length=1, max_length=100)
     done: bool = False
+
+    @field_validator("title")
+    @classmethod
+    def title_must_not_be_blank(cls, value: str) -> str:
+        trimmed = value.strip()
+        if not trimmed:
+            raise ValueError("空白だけのタイトルは登録できません")
+        return trimmed
 
 
 class TodoRead(BaseModel):
