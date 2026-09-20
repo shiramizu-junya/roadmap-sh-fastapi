@@ -481,3 +481,300 @@ curl -s -i http://127.0.0.1:8000/todos/search
 | スライス `[:n]` | 2-3 で Python注 |
 | 出力の形の宣言（レスポンスモデル） | ⏭️ **P1-3** で回収（2-4 で宣言済み） |
 | `def` と `async def` の使い分け | ⏭️ **P3-1** で回収（P1-1 から継続） |
+
+---
+
+## P1-3: 作成とレスポンスの形
+
+**作るもの**: `POST /todos` が 201 で作成済み TODO を返す。返す形は型で宣言する
+**重要度**: 🔴 毎日使う — 入力の形と出力の形を別々に宣言するのは、FastAPI で API を書く基本姿勢だから
+**前ステップとの接続**: P1-2 の「引数の分類規則」の**規則3（Pydantic モデル → リクエストボディ）**を埋める。`app/main.py` に追記する
+
+### 3-0. このステップの初出トークン
+
+**FastAPI**: `BaseModel`（ボディ判定）/ 戻り値アノテーション（レスポンスモデル）/ `status_code=201`（3）
+**Python**: `class` / クラス属性の型アノテーション
+**周辺**: なし
+
+### 3-1. コード
+
+3つとも初出なので**完成コード全文**。`app/main.py` を丸ごとこの内容に置き換える。
+
+```python
+# app/main.py
+from typing import Annotated
+
+from fastapi import FastAPI, HTTPException, Query
+from pydantic import BaseModel
+
+app = FastAPI()
+
+
+class TodoCreate(BaseModel):
+    """クライアントから受け取る形。id はサーバが決めるので含めない"""
+    title: str
+    done: bool = False
+
+
+class TodoRead(BaseModel):
+    """クライアントに返す形。内部フィールドは含めない"""
+    id: int
+    title: str
+    done: bool
+
+
+# メモリ上の仮データ。internal_note は「外に出してはいけない内部情報」の見本
+_todos: list[dict] = [
+    {"id": 1, "title": "牛乳を買う", "done": False, "internal_note": "社内メモ1"},
+    {"id": 2, "title": "docs を書く", "done": True, "internal_note": "社内メモ2"},
+]
+
+
+@app.get("/health")
+def health():
+    # 死活確認。アプリが起動してリクエストを処理できることだけを返す
+    return {"status": "ok"}
+
+
+@app.get("/todos")
+def list_todos(
+    done: Annotated[bool | None, Query()] = None,
+    limit: Annotated[int, Query(ge=1, le=100)] = 20,
+):
+    items = [t for t in _todos if done is None or t["done"] == done]
+    return items[:limit]
+
+
+@app.post("/todos", status_code=201)
+def create_todo(todo: TodoCreate) -> TodoRead:
+    new_id = max([t["id"] for t in _todos], default=0) + 1
+    record = todo.model_dump()
+    record["id"] = new_id
+    record["internal_note"] = "内部メモ（APIには出さない）"
+    _todos.append(record)
+    return record
+
+
+@app.get("/todos/{todo_id}")
+def get_todo(todo_id: int):
+    for todo in _todos:
+        if todo["id"] == todo_id:
+            return todo
+    raise HTTPException(status_code=404, detail="Todo not found")
+```
+
+✅ 検証済み: Python 3.12.13 / FastAPI 0.141.1 / Pydantic 2.13.5
+（`TestClient` で7パターンと OpenAPI スキーマを実測。結果は 3-6）
+
+| 行 | 何をしているか |
+| --- | --- |
+| `class TodoCreate(BaseModel)` | **入力**の形。`id` を持たないのが要点 |
+| `done: bool = False` | 省略可。既定 `False` |
+| `class TodoRead(BaseModel)` | **出力**の形。`internal_note` を持たないのが要点 |
+| `@app.post(..., status_code=201)` | 成功時の既定ステータスを 200 から 201 に変える |
+| `todo: TodoCreate` | 分類規則3 に当たり、**リクエストボディ**と判定される |
+| `-> TodoRead` | 戻り値をこの形で作り直してから返す |
+| `record = todo.model_dump()` | Pydantic モデルを dict に変換する |
+
+> 🔄 **素材からの変更**: 公式は1つのモデルを入出力で使い回す例から始める。本教材は最初から `TodoCreate` / `TodoRead` を分ける。P3 で DB モデルが加わったとき、「テーブルの形・入力の形・出力の形」の3つが必要になり、後から分けると全エンドポイントを書き直すことになるため。
+
+### 3-2. 🔬 仕組み解剖
+
+#### (a) `todo: TodoCreate` — リクエストボディ
+
+**正式名称**: リクエストボディ（request body）。宣言は P1-2 の分類規則そのもので、**規則3（Pydantic モデル型 → ボディ）**に当たる。
+
+**実行時に何が起きるか**
+
+- **起動時**: FastAPI が `TodoCreate` を見て「これは Pydantic モデルだからボディだ」と判定し、同時に**そのクラスから JSON Schema を生成**して OpenAPI に登録する
+- **リクエスト時**: Starlette が受信したバイト列を JSON としてパースし、Pydantic が `TodoCreate` として検証・変換する。成功したら `TodoCreate` の**インスタンス**が `todo` に入って関数が呼ばれる
+
+- **どのライブラリの責務か**: ボディ判定は FastAPI、受信は Starlette、検証と変換は Pydantic
+- **失敗したらどうなるか**: **関数は呼ばれず** 422。`loc` の先頭は `"body"` になる
+
+```
+{"title": 123} -> 422 {"type":"string_type","loc":["body","title"],"msg":"Input should be a valid string"}
+```
+
+Pydantic v2 は `int` を `str` に**黙って変換しない**。TS で `123` を `string` として受け取れないのと同じ厳しさが、実行時に効く。
+
+**既知スタックとの対応**: zod の `schema.parse(req.body)` をハンドラの手前に自動で挟んだ状態。違いは、**スキーマを別に書くのではなくクラス定義がそのままスキーマになる**こと。React に対応物なし。
+
+**なぜクラスで書くのか**: 型・検証・OpenAPI 定義・エディタ補完が1つの定義から出るため。スキーマとクラスを別に書くと必ずズレる。
+根拠: https://fastapi.tiangolo.com/tutorial/body/
+
+#### (b) `-> TodoRead` — レスポンスモデル
+
+**この教材で最も重要な1行**。戻り値のアノテーションは「ドキュメント」ではなく**実行される仕様**になる。
+
+**実行時に何が起きるか**
+
+- **起動時**: FastAPI が戻り値アノテーションを読み、`TodoRead` をレスポンスモデルとして登録する。OpenAPI の 201 応答に `$ref: TodoRead` が入る
+- **リクエスト時**: ハンドラの戻り値を**そのまま返さない**。`TodoRead` として一度作り直し（検証し）、その結果を JSON にする。**`TodoRead` に無いフィールドは落ちる**
+
+実測での対比がすべてを語る。同じ `_todos` の要素を返しているのに、
+
+```
+POST /todos  ->  {"id":3,"title":"牛乳を買う","done":false}                      ← internal_note が無い
+GET  /todos  ->  [{"id":1,...,"internal_note":"社内メモ1"}, ...]                 ← 漏れている
+```
+
+差は `-> TodoRead` を書いたかどうかだけ。`GET /todos` にはまだ書いていないので、内部フィールドがそのまま外に出ている。
+
+- **どのライブラリの責務か**: 登録は FastAPI、作り直しは Pydantic
+- **失敗したらどうなるか**: 戻り値が `TodoRead` として成立しない場合（必須フィールドが欠けているなど）、**500** になる。422 ではない。422 は「クライアントの入力が悪い」、500 は「サーバの出力が仕様違反」
+
+OpenAPI 上の差も実測で見える。
+
+```
+POST /todos の 201: {"schema": {"$ref": "#/components/schemas/TodoRead"}}
+GET  /todos の 200: {"schema": {}}                                        ← 空
+```
+
+**既知スタックとの対応**: 対応物なし。Express も NestJS（`class-transformer` を足さない限り）も、戻り値を宣言しても実行時には何もしない。「返す型を書いたら本当にその形に絞られる」のは TS 側には無い挙動。
+
+**なぜこの設計なのか**: 出力の漏洩は**書き忘れでは気づけない**種類の事故だから。「余分なフィールドを消す」コードを各ハンドラに書く方式だと、新しい内部フィールドを1つ足した瞬間に全エンドポイントが漏洩候補になる。出口の形を宣言しておけば、**足したフィールドは既定で外に出ない**。
+根拠: https://fastapi.tiangolo.com/tutorial/response-model/
+
+#### (c) `status_code=201`
+
+**正式名称**: パスオペレーションデコレータの `status_code` 引数。**成功時の既定**ステータスを指定する（`HTTPException` で投げたエラーには影響しない）。
+
+- **いつ評価されるか**: 起動時に1回。`APIRoute` に保持される
+- **なぜ 201 か**: `POST` が**新しいリソースを作った**ことを表すため。200 だと「処理は成功した」以上の情報が無く、作成されたのかどうかをクライアントがボディから推測することになる
+  根拠: https://www.rfc-editor.org/rfc/rfc9110（201 Created の定義）
+
+**既知スタックとの対応**: Express の `res.status(201)` と結果は同じだが、**書く場所が違う**。Express は処理の中（実行時の命令）、FastAPI は宣言の中（起動時の仕様）。だから `/docs` にも自動で反映される。
+
+### 3-3. 🐍 Python注 ／ 🧩 周辺注
+
+> 🐍 **Python注**: `class TodoCreate(BaseModel):` はクラス定義。括弧の中は**継承元**で、TS の `class TodoCreate extends BaseModel` と同じ。
+
+> 🐍 **Python注**: クラス直下の `title: str` は「型を宣言しただけの属性」。値を書かなければ**必須**、`done: bool = False` のように書けば**既定値つき**になる。
+
+> 🐍 **Python注**: `"""..."""` はドキュメント文字列。クラスや関数の直下に置くと説明として扱われる（コメント `#` と違い、実行時にも値として残る）。
+
+> 🧩 **周辺注**: このステップでも Docker / MySQL / Alembic は使わない。
+
+### 3-4. 解説 — なぜこう設計するか
+
+**なぜ `TodoCreate` に `id` を入れないのか。** `id` はサーバが決める値で、クライアントが指定してよい値ではない。モデルに無いフィールドは**黙って捨てられる**ので、`{"title":"z","id":999}` を送っても `id` は無視され、サーバが採番した値になる（実測: `id` は 6 になった）。
+
+これは偶然の親切ではなく、**入力モデルを絞ることが防御になる**という設計。もし1つのモデルを入出力で使い回して `id` を含めていたら、クライアントが他人の `id` を上書きできる余地が生まれる。
+
+**なぜ入力と出力でクラスを2つに分けるのか。** 同じ TODO でも、入口では `id` が不要で、出口では `id` が必要、そして `internal_note` はどちらにも出てはいけない。**3種類の「形」が必要**で、1クラスでは表現できない。P3 でここに「DB のテーブルの形」が加わる。
+
+> ⏭️ **後で回収**: `GET /todos` と `GET /todos/{todo_id}` にはまだ戻り値の型を書いていないので `internal_note` が漏れたままになっている。**P3-3** で `TodoRead` を全エンドポイントに適用する（DB のオブジェクトから Pydantic モデルを作る話と同時にやるほうが自然なため）。
+
+> 🧠 **FastAPI の考え方**: 型宣言は「入口の検査」と「出口の検査」の両方になる。入口を絞ると**受け取ってはいけない値**が、出口を絞ると**返してはいけない値**が、どちらも既定で止まる。
+
+### 3-5. 🏢 実務メモ ／ ⚠️ アンチパターン
+
+> 🏢 **実務メモ**: 入力モデルには「クライアントが決めてよい項目」だけを置く。`id` / `created_at` / `owner_id` / `is_admin` のようなサーバ側が決める項目を入力モデルに含めると、リクエストで上書きできてしまう（OWASP API Security Top 10 の «Broken Object Property Level Authorization»、いわゆる mass assignment）。P4 で `owner_id` を扱うときに実際に効いてくる。
+> 根拠: https://owasp.org/API-Security/editions/2023/en/0xa3-broken-object-property-level-authorization/
+
+> ⚠️ **アンチパターン**: 1つのモデルを入力と出力で使い回す。最初は短く書けるが、`hashed_password` のような「DB には要るが返してはいけない」列が1つ増えた瞬間に破綻する。**出力モデルを別に持っていれば、列を足しても既定で外に出ない。**
+> 根拠: https://fastapi.tiangolo.com/tutorial/response-model/
+
+### 3-6. 🔮 予測 → 動作確認
+
+**先に予想を書いてから叩く。**
+
+1. `{"title":"z","id":999}` を POST したら、返ってくる `id` は何か。422 になるか
+2. モデルに無いフィールド `{"title":"y","extra":"余分"}` を送ったら 422 か、それとも通るか
+3. `{"title":123}` は通るか。Python では `str(123)` ができるが、Pydantic はどうするか
+
+---
+
+```bash
+curl -i -X POST http://127.0.0.1:8000/todos \
+  -H "Content-Type: application/json" \
+  -d '{"title":"牛乳を買う"}'
+```
+
+✅ 検証済み: `201 Created`、ボディは以下
+
+```json
+{"id":3,"title":"牛乳を買う","done":false}
+```
+
+**`internal_note` が入っていない**。ハンドラは `record`（`internal_note` を含む dict）を返しているのに、`-> TodoRead` が出口で落としている。
+
+```bash
+curl -s -X POST http://127.0.0.1:8000/todos -H "Content-Type: application/json" -d '{}'
+curl -s -X POST http://127.0.0.1:8000/todos -H "Content-Type: application/json" -d '{"title":123}'
+curl -s -X POST http://127.0.0.1:8000/todos -H "Content-Type: application/json" -d '{"title":"y","extra":"余分"}'
+curl -s -X POST http://127.0.0.1:8000/todos -H "Content-Type: application/json" -d '{"title":"z","id":999}'
+```
+
+✅ 検証済み: 実際の結果
+
+| 送ったボディ | 結果 | 何が起きたか |
+| --- | --- | --- |
+| `{}` | **422** `{"type":"missing","loc":["body","title"]}` | 必須が無い。`loc` が `"body"` |
+| `{"title":123}` | **422** `{"type":"string_type","loc":["body","title"]}` | **数値を文字列に変換しない** |
+| `{"title":"y","extra":"余分"}` | **201** `{"id":5,"title":"y","done":false}` | 余分なフィールドは**黙って無視**（エラーにはしない） |
+| `{"title":"z","id":999}` | **201** `{"id":6,...}` | `id` も無視され、**サーバの採番が勝つ** |
+
+最後の2つが重要。**Pydantic は「足りない」は怒るが「余分」は黙って捨てる**（既定の挙動）。これが 3-5 の mass assignment 対策の実体。
+
+```bash
+curl -s http://127.0.0.1:8000/todos?limit=3
+```
+
+✅ 検証済み: `internal_note` がそのまま返る
+
+```json
+[{"id":1,"title":"牛乳を買う","done":false,"internal_note":"社内メモ1"}, ...]
+```
+
+**同じデータなのに POST では消え、GET では出る。** 差は `-> TodoRead` の有無だけ。これが P3-3 で回収する宿題になる。
+
+ブラウザで `http://127.0.0.1:8000/docs` を開く。`POST /todos` には Example Value とスキーマが出るが、`GET /todos` の応答は空のまま。
+
+✅ 検証済み: OpenAPI 定義の実測
+
+```
+POST /todos の 201: {"schema": {"$ref": "#/components/schemas/TodoRead"}}
+GET  /todos の 200: {"schema": {}}
+```
+
+### 3-7. ✅ 想起チェック
+
+**Q1.** ハンドラは `internal_note` を含む dict を返している。なぜレスポンスに出ないのか。落としているのは誰か。
+
+<details><summary>答え</summary>
+
+`-> TodoRead` があるため、FastAPI は戻り値をそのまま返さず、**`TodoRead` として作り直してから** JSON にする。`TodoRead` に `internal_note` フィールドが無いので落ちる。作り直しているのは **Pydantic**（登録したのは FastAPI）。`GET /todos` は戻り値の型を宣言していないので、この工程が無く、dict がそのまま出る。
+</details>
+
+**Q2.** `{"title":"z","id":999}` が 422 にならないのはなぜか。「余分なフィールドはエラー」にしたい場合は何が必要か。
+
+<details><summary>答え</summary>
+
+Pydantic の既定は「知らないフィールドは無視」。必須が欠けていれば怒るが、余分は黙って捨てる。結果として `id` はクライアントから指定できず、サーバの採番が使われる（mass assignment の防御になっている）。
+
+エラーにしたい場合はモデル側の設定で「余分を禁止」に変えられる。ただし既定のままでも**値が通ることはない**ので、この教材では既定を使う。
+</details>
+
+**Q3.** `-> TodoRead` と宣言したのに、ハンドラが `{"title": "x"}`（`id` 無し）を返したらどうなるか。ステータスコードは。
+
+<details><summary>答え</summary>
+
+`TodoRead` は `id` を必須にしているので、出口の作り直しに失敗する。これはクライアントの入力の問題ではなく**サーバが仕様どおりに返せていない**状態なので、**500** になる（422 ではない）。入口の失敗は 422、出口の失敗は 500、と覚える。
+</details>
+
+### 3-8. 初出トークンの回収確認
+
+| トークン | 扱い |
+| --- | --- |
+| `BaseModel`（ボディ判定） | 3-2(a) で仕組み解剖 |
+| 戻り値アノテーション（レスポンスモデル） | 3-2(b) で仕組み解剖 |
+| `status_code=201` | 3-2(c) で仕組み解剖 |
+| `.model_dump()` | 3-2(a) の範囲内で扱った（Pydantic モデル → dict の変換） |
+| `class` / 継承 | 3-3 で Python注 |
+| クラス属性の型アノテーション | 3-3 で Python注 |
+| ドキュメント文字列 `"""..."""` | 3-3 で Python注 |
+| dict → JSON の変換 / 出力の形の宣言 | ✅ **本ステップで回収**（P1-1・P1-2 からの宿題） |
+| `GET` 系へのレスポンスモデル適用 | ⏭️ **P3-3** で回収（3-4 で宣言済み） |
+| `def` と `async def` の使い分け | ⏭️ **P3-1** で回収（P1-1 から継続） |
