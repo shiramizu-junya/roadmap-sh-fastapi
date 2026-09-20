@@ -778,3 +778,261 @@ Pydantic の既定は「知らないフィールドは無視」。必須が欠�
 | dict → JSON の変換 / 出力の形の宣言 | ✅ **本ステップで回収**（P1-1・P1-2 からの宿題） |
 | `GET` 系へのレスポンスモデル適用 | ⏭️ **P3-3** で回収（3-4 で宣言済み） |
 | `def` と `async def` の使い分け | ⏭️ **P3-1** で回収（P1-1 から継続） |
+
+---
+
+## P1-4: 検証を締めて 422 を読む
+
+**作るもの**: `title` に長さ制限と「空白だけは禁止」の独自ルールを入れ、422 のボディを読めるようにする
+**重要度**: 🔴 毎日使う — 入力検証はどの API でも必ず書く。そして **422 を読めないと詰まる時間が最も長い**
+**前ステップとの接続**: P1-3 の `TodoCreate` に制約を足す。`app/main.py` の `TodoCreate` だけを書き換える
+
+### 4-0. このステップの初出トークン
+
+**FastAPI**: `Field()` / `field_validator` / 422 ボディの構造（`type` / `loc` / `msg` / `ctx` / `input`）（3）
+**Python**: `@classmethod` / `.strip()` / `if not x`
+**周辺**: なし
+
+### 4-1. コード
+
+初出なので完成形を出す。**変更は `TodoCreate` と import 行だけ**（他のエンドポイントはそのまま）。
+
+```python
+# app/main.py — 差分（import 行と TodoCreate のみ）
+from pydantic import BaseModel, Field, field_validator
+
+
+class TodoCreate(BaseModel):
+    """クライアントから受け取る形。id はサーバが決めるので含めない"""
+
+    title: str = Field(min_length=1, max_length=100)
+    done: bool = False
+
+    @field_validator("title")
+    @classmethod
+    def title_must_not_be_blank(cls, value: str) -> str:
+        trimmed = value.strip()
+        if not trimmed:
+            raise ValueError("空白だけのタイトルは登録できません")
+        return trimmed
+```
+
+✅ 検証済み: Python 3.12.13 / FastAPI 0.141.1 / Pydantic 2.13.5
+（`TestClient` で5パターン + OpenAPI スキーマ + デコレータ順序の挙動を実測。結果は 4-6）
+
+| 行 | 何をしているか |
+| --- | --- |
+| `Field(min_length=1, max_length=100)` | 型だけでは表せない**制約**を足す。`str` であることは型が、長さは `Field` が担当 |
+| `@field_validator("title")` | `title` を検証する関数をこのモデルに登録する |
+| `trimmed = value.strip()` | 前後の空白を落とす |
+| `raise ValueError(...)` | 検証失敗。**`HTTPException` ではない**（後述） |
+| `return trimmed` | **検証器は値を書き換えて返せる**。以降はこの値が使われる |
+
+### 4-2. 🔬 仕組み解剖
+
+#### (a) `Field(min_length=1, max_length=100)`
+
+**正式名称**: Pydantic のフィールド制約（field constraints）。
+
+**実行時に何が起きるか**
+
+- **起動時**: `TodoCreate` のクラス定義が評価されるときに Pydantic が制約を読み取り、検証器（Rust 実装のコア）を組み立てる。同時に **JSON Schema にも反映**される
+- **リクエスト時**: 組み立て済みの検証器が値を検査する。毎回ルールを解釈し直すわけではない
+
+OpenAPI への反映は実測で見える。
+
+```json
+"title": { "type": "string", "maxLength": 100, "minLength": 1, "title": "Title" }
+```
+
+- **どのライブラリの責務か**: 完全に Pydantic。FastAPI はモデルを渡しているだけ
+- **失敗したらどうなるか**: 422。`type` は `string_too_short` / `string_too_long` になり、**`ctx` に違反した閾値が入る**
+
+**既知スタックとの対応**: zod の `z.string().min(1).max(100)` と同じ役割。違いは、zod がスキーマを別に書くのに対し、`Field` は**クラス属性のデフォルト値の位置**に書くこと。
+
+**なぜ型と別に書くのか**: 「文字列であること」は型の話、「1〜100文字であること」は値の話で、レイヤが違うため。`Annotated[str, Field(min_length=1)]` と書くこともでき、意味は同じ。P1-2 の `Query()` と同じ構造だと気づけば見通しがよくなる。
+根拠: https://docs.pydantic.dev/latest/concepts/fields/
+
+#### (b) `@field_validator("title")`
+
+**正式名称**: フィールドバリデータ。`Field` の宣言的な制約では表せないルールを、関数で書くための仕組み。
+
+**実行時に何が起きるか** — **実行順序が重要**。
+
+1. まず**型変換**（`str` か？）
+2. 次に **`Field` の制約**（長さは足りるか？）
+3. 最後に **`field_validator`**（独自ルール）
+
+実測でこの順序が確認できる。`""`（空文字）を送ると `Field` の `min_length` で止まり、**独自バリデータには到達しない**。
+
+```
+{"title":""}    -> type: "string_too_short"   ← Field で止まった
+{"title":"   "} -> type: "value_error"        ← Field は通過し、独自バリデータで止まった
+```
+
+- **どのライブラリの責務か**: Pydantic
+- **失敗したらどうなるか**: `ValueError` を投げると 422 になり、`type` は `value_error`、`msg` は **`"Value error, "` が前置された**自分のメッセージになる
+
+```json
+{"type":"value_error","loc":["body","title"],
+ "msg":"Value error, 空白だけのタイトルは登録できません","input":"   "}
+```
+
+**なぜ `HTTPException` ではなく `ValueError` を投げるのか**: このクラスは FastAPI 専用ではなく、**ただの Pydantic モデル**だから。HTTP を知らない層に HTTP の例外を持ち込むと、CLI やバッチから同じモデルを使えなくなる。`ValueError` を投げておけば、HTTP に変換するかどうかは外側（FastAPI）が決められる。
+
+**値を書き換えられる点**: `return trimmed` により、`"  牛乳を買う  "` は `"牛乳を買う"` として保存される（実測で確認）。検証器は「検査」だけでなく「正規化」の場所でもある。
+根拠: https://docs.pydantic.dev/latest/concepts/validators/
+
+#### (c) 422 のボディを読む
+
+**正式名称**: `422 Unprocessable Content`。「構文は正しいが、内容が処理できない」を表す。
+根拠: https://www.rfc-editor.org/rfc/rfc9110#name-422-unprocessable-content
+
+`detail` は**常にリスト**で、**エラーは1件ずつではなくまとめて返る**（実測: 2箇所間違えると2件入る）。
+
+| キー | 意味 | 読み方 |
+| --- | --- | --- |
+| `type` | エラーの種類 | `string_too_short` / `bool_parsing` / `value_error` など。**機械判定はここを見る** |
+| `loc` | 場所 | `["body","title"]`。**第1要素が `body` / `query` / `path` のどれか**を最初に見る（P1-2 参照） |
+| `msg` | 人間向けの説明 | UI にそのまま出す用途には向かない（英語＋`Value error, ` の前置） |
+| `ctx` | 文脈 | 違反した閾値（`{"min_length":1}` など）。**エラーメッセージを自前で組み立てるならここ** |
+| `input` | 実際に来た値 | デバッグ用。**ログに出すと個人情報が載る**点に注意 |
+
+- **どのライブラリの責務か**: このボディを組み立てるのは Pydantic、HTTP レスポンスにするのは FastAPI（`RequestValidationError` のハンドラ）
+
+**なぜ最初のエラーで打ち切らないのか**: フォームを1項目ずつ直させるのは UX として悪いため。全部まとめて返せば、クライアントは一度に全項目へ印を付けられる。
+
+### 4-3. 🐍 Python注 ／ 🧩 周辺注
+
+> 🐍 **Python注**: `@classmethod` は「インスタンスではなくクラス自身を第1引数（`cls`）で受け取る関数」にする指定。Pydantic v2 では**省略しても動く**が、型チェッカが誤検知するため付けるのが推奨。
+
+> 🐍 **Python注**: `value.strip()` は前後の空白（改行・タブ含む）を落とした**新しい文字列**を返す。JS の `String.prototype.trim()` と同じ。
+
+> 🐍 **Python注**: `if not trimmed:` は「空文字なら真」。Python では空文字・空list・`0`・`None` が偽として扱われる（JS の falsy とほぼ同じだが、`"0"` は真）。
+
+> 🧩 **周辺注**: このステップでも Docker / MySQL / Alembic は使わない。
+
+### 4-4. 解説 — なぜこう設計するか
+
+**`Field` と `field_validator` の使い分け。** 宣言で書けるものは `Field` に寄せる。理由は2つあり、(1) OpenAPI に反映されるのでクライアントが事前に知れる、(2) Rust 実装の検証器が使われるため速い。`field_validator` は「宣言では表せないもの」専用と考える。
+
+今回の「空白だけ禁止」は、`min_length=1` では表せない（`"   "` は3文字なので通ってしまう）。だから関数が要る。
+
+**正規化を検証器でやる理由。** `"  牛乳  "` と `"牛乳"` を別物として保存すると、後から「重複チェックが効かない」「検索に引っかからない」という形で壊れる。**入口で形を揃える**のが最も安い。P3 で DB に入れるようになると、揃っていないデータは修正コストが跳ね上がる。
+
+> 🧠 **FastAPI の考え方**: 検証器は「関所」ではなく「入口の整形工場」。弾くだけでなく、通す値の形も整えて奥へ渡す。
+
+### 4-5. 🏢 実務メモ ／ ⚠️ アンチパターン
+
+> 🏢 **実務メモ**: `422` のボディをそのままクライアントに見せない。`msg` は英語で、`input` には**送られてきた生の値がそのまま入る**。パスワードや個人情報を含むフィールドで検証が落ちると、それがレスポンスとログの両方に出る。表示用のメッセージは `type` と `ctx` から自前で組み立て、`input` は落とす。P5-3 で例外ハンドラを一元化するときに実装する。
+> 根拠: https://fastapi.tiangolo.com/tutorial/handling-errors/
+
+> ⚠️ **アンチパターン**: `@classmethod` を `@field_validator` の**上**に書く。エラーにも警告にもならず、**バリデータが静かに無視される**。
+
+```python
+@classmethod            # ← 上下が逆
+@field_validator("title")
+def up(cls, v: str) -> str: return v.upper()
+```
+
+✅ 検証済み: 正しい順序では `"abc"` → `"ABC"` になるが、逆順では `"abc"` のまま（例外は出ない）。
+デコレータは**下から順に適用される**ため、`field_validator` が登録する前に `classmethod` が包んでしまう。
+根拠: https://docs.pydantic.dev/latest/concepts/validators/
+
+### 4-6. 🔮 予測 → 動作確認
+
+**先に予想を書いてから叩く。**
+
+1. `{"title":""}` と `{"title":"   "}` は**同じ `type`** の 422 になるか。違うなら、なぜ違うか
+2. `{"title":"  牛乳を買う  "}` は 422 か 201 か。201 なら、保存される `title` は何か
+3. `{"title":"","done":"maybe"}` のように2箇所間違えたら、返るエラーは何件か
+
+---
+
+```bash
+curl -s -X POST http://127.0.0.1:8000/todos \
+  -H "Content-Type: application/json" -d '{"title":"  牛乳を買う  "}'
+```
+
+✅ 検証済み: `201`、**前後の空白が落ちている**
+
+```json
+{"id":2,"title":"牛乳を買う","done":false}
+```
+
+```bash
+curl -s -X POST http://127.0.0.1:8000/todos -H "Content-Type: application/json" -d '{"title":""}'
+curl -s -X POST http://127.0.0.1:8000/todos -H "Content-Type: application/json" -d '{"title":"   "}'
+```
+
+✅ 検証済み: **どちらも 422 だが `type` が違う**
+
+| 送った値 | `type` | 誰が止めたか |
+| --- | --- | --- |
+| `""` | `string_too_short`（`ctx: {"min_length":1}`） | **`Field`**。独自バリデータには届いていない |
+| `"   "` | `value_error`（`msg: "Value error, 空白だけの…"`） | **`field_validator`**。`Field` は通過した |
+
+同じ「空っぽ」でも**止まる場所が違う**。検証は「型 → `Field` → `field_validator`」の順に走り、**手前で落ちたら奥は実行されない**。
+
+```bash
+curl -s -X POST http://127.0.0.1:8000/todos \
+  -H "Content-Type: application/json" -d '{"title":"","done":"maybe"}'
+```
+
+✅ 検証済み: **2件**まとめて返る
+
+```json
+{"detail":[
+  {"type":"string_too_short","loc":["body","title"],"ctx":{"min_length":1}},
+  {"type":"bool_parsing","loc":["body","done"],"input":"maybe"}
+]}
+```
+
+ブラウザで `/docs` を開くと、`TodoCreate` の `title` に `minLength: 1` / `maxLength: 100` が表示される。
+
+✅ 検証済み: OpenAPI 実測
+
+```json
+"title": { "type": "string", "maxLength": 100, "minLength": 1, "title": "Title" }
+```
+
+**`Field` の制約は仕様として外に出るが、`field_validator` のルールは出ない**（関数の中身は機械には読めないため）。独自ルールを増やすほど、ドキュメントに載らない仕様が増える点は意識しておく。
+
+### 4-7. ✅ 想起チェック
+
+**Q1.** `{"title":""}` が独自バリデータに届かないのはなぜか。
+
+<details><summary>答え</summary>
+
+検証は「型変換 → `Field` の制約 → `field_validator`」の順に走り、**手前で失敗したら奥は実行されない**。`""` は `min_length=1` に違反するので `Field` の段階で止まり、`type` は `string_too_short` になる。`"   "` は3文字なので `Field` を通過し、独自バリデータまで届いて `value_error` になる。
+</details>
+
+**Q2.** バリデータで `HTTPException(status_code=422, ...)` を投げないのはなぜか。
+
+<details><summary>答え</summary>
+
+`TodoCreate` は FastAPI 専用のクラスではなく**ただの Pydantic モデル**で、HTTP を知らない層だから。`ValueError` を投げておけば、HTTP に変換するかどうかは外側の FastAPI が決められ、同じモデルを CLI やバッチ処理からも使える。層をまたぐ依存を作らない、という設計判断。
+</details>
+
+**Q3.** 422 のボディのうち、クライアントに表示するメッセージを組み立てるのに使うべきキーはどれか。使ってはいけないキーは。
+
+<details><summary>答え</summary>
+
+使うのは **`type` と `ctx`**（`type` で種類を判定し、`ctx` の閾値を埋め込む）。`loc` でどの項目かを特定する。
+
+避けるのは **`msg` と `input`**。`msg` は英語で `"Value error, "` の前置が付く。`input` には**送られてきた生の値**が入るので、パスワードなどが検証に落ちるとそのまま露出する。
+</details>
+
+### 4-8. 初出トークンの回収確認
+
+| トークン | 扱い |
+| --- | --- |
+| `Field()` | 4-2(a) で仕組み解剖 |
+| `field_validator` | 4-2(b) で仕組み解剖 |
+| 422 ボディの構造（`type`/`loc`/`msg`/`ctx`/`input`） | 4-2(c) で仕組み解剖 |
+| `@classmethod` | 4-3 で Python注（+ 4-5 で順序のアンチパターン） |
+| `.strip()` | 4-3 で Python注 |
+| `if not x`（真偽の扱い） | 4-3 で Python注 |
+| 422 の表示用整形 / `input` を落とす | ⏭️ **P5-3** で回収（例外ハンドラの一元化として実装） |
+| `GET` 系へのレスポンスモデル適用 | ⏭️ **P3-3** で回収（P1-3 から継続） |
+| `def` と `async def` の使い分け | ⏭️ **P3-1** で回収（P1-1 から継続） |
