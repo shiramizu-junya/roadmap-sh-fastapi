@@ -492,7 +492,7 @@ curl -s -i http://127.0.0.1:8000/todos/search
 
 ### 3-0. このステップの初出トークン
 
-**FastAPI**: `BaseModel`（ボディ判定）/ 戻り値アノテーション（レスポンスモデル）/ `status_code=201`（3）
+**FastAPI**: `BaseModel`（ボディ判定）/ `response_model`（レスポンスモデル）/ `status_code=201`（3）
 **Python**: `class` / クラス属性の型アノテーション
 **周辺**: なし
 
@@ -502,7 +502,7 @@ curl -s -i http://127.0.0.1:8000/todos/search
 
 ```python
 # app/main.py
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel
@@ -545,8 +545,8 @@ def list_todos(
     return items[:limit]
 
 
-@app.post("/todos", status_code=201)
-def create_todo(todo: TodoCreate) -> TodoRead:
+@app.post("/todos", response_model=TodoRead, status_code=201)
+def create_todo(todo: TodoCreate) -> Any:
     new_id = max([t["id"] for t in _todos], default=0) + 1
     record = todo.model_dump()
     record["id"] = new_id
@@ -573,7 +573,8 @@ def get_todo(todo_id: int):
 | `class TodoRead(BaseModel)` | **出力**の形。`internal_note` を持たないのが要点 |
 | `@app.post(..., status_code=201)` | 成功時の既定ステータスを 200 から 201 に変える |
 | `todo: TodoCreate` | 分類規則3 に当たり、**リクエストボディ**と判定される |
-| `-> TodoRead` | 戻り値をこの形で作り直してから返す |
+| `response_model=TodoRead` | 戻り値をこの形で作り直してから返す（`-> TodoRead` と等価。使い分けは 3-2(b)） |
+| `-> Any` | ハンドラは dict を返す、という**型チェッカ向けの宣言**。FastAPI の挙動には影響しない |
 | `record = todo.model_dump()` | Pydantic モデルを dict に変換する |
 
 > 🔄 **素材からの変更**: 公式は1つのモデルを入出力で使い回す例から始める。本教材は最初から `TodoCreate` / `TodoRead` を分ける。P3 で DB モデルが加わったとき、「テーブルの形・入力の形・出力の形」の3つが必要になり、後から分けると全エンドポイントを書き直すことになるため。
@@ -603,13 +604,31 @@ Pydantic v2 は `int` を `str` に**黙って変換しない**。TS で `123` �
 **なぜクラスで書くのか**: 型・検証・OpenAPI 定義・エディタ補完が1つの定義から出るため。スキーマとクラスを別に書くと必ずズレる。
 根拠: https://fastapi.tiangolo.com/tutorial/body/
 
-#### (b) `-> TodoRead` — レスポンスモデル
+#### (b) `response_model=TodoRead` — レスポンスモデル
 
-**この教材で最も重要な1行**。戻り値のアノテーションは「ドキュメント」ではなく**実行される仕様**になる。
+**この教材で最も重要な宣言**。出口の形の宣言は「ドキュメント」ではなく**実行される仕様**になる。
+
+**書き方が2つある。まずそこから。**
+
+| 書き方 | 使う場面 |
+| --- | --- |
+| `def create_todo(...) -> TodoRead:` | ハンドラが**本当に `TodoRead` を返す**とき。こちらが基本形 |
+| `@app.post(..., response_model=TodoRead)` | **宣言した型とは違うもの**（dict や DB オブジェクト）を返すとき |
+
+本教材は dict（`record`）を返すので**後者**を使う。前者で書くと、型チェッカが「dict を返しているのに `TodoRead` と宣言している」と正しく指摘する。FastAPI 公式もこの場合は `response_model` を使うよう案内している。
+
+```
+line 66: Type "dict[str, Any]" is not assignable to return type "TodoRead"
+```
+
+✅ 検証済み: Pyright 1.1 系での実測。`response_model=` + `-> Any` にすると指摘が消え、**レスポンスも OpenAPI も同一**であることを確認した
+
+`-> Any` は「何を返すか型では縛らない」という型チェッカ向けの宣言で、FastAPI の挙動には影響しない。両方書いた場合は **`response_model` が優先される**。
+根拠: https://fastapi.tiangolo.com/tutorial/response-model/
 
 **実行時に何が起きるか**
 
-- **起動時**: FastAPI が戻り値アノテーションを読み、`TodoRead` をレスポンスモデルとして登録する。OpenAPI の 201 応答に `$ref: TodoRead` が入る
+- **起動時**: FastAPI が `response_model` を読み、`TodoRead` をレスポンスモデルとして登録する。OpenAPI の 201 応答に `$ref: TodoRead` が入る
 - **リクエスト時**: ハンドラの戻り値を**そのまま返さない**。`TodoRead` として一度作り直し（検証し）、その結果を JSON にする。**`TodoRead` に無いフィールドは落ちる**
 
 実測での対比がすべてを語る。同じ `_todos` の要素を返しているのに、
@@ -619,7 +638,7 @@ POST /todos  ->  {"id":3,"title":"牛乳を買う","done":false}                
 GET  /todos  ->  [{"id":1,...,"internal_note":"社内メモ1"}, ...]                 ← 漏れている
 ```
 
-差は `-> TodoRead` を書いたかどうかだけ。`GET /todos` にはまだ書いていないので、内部フィールドがそのまま外に出ている。
+差は出口の形を宣言したかどうかだけ。`GET /todos` にはまだ宣言していないので、内部フィールドがそのまま外に出ている。
 
 - **どのライブラリの責務か**: 登録は FastAPI、作り直しは Pydantic
 - **失敗したらどうなるか**: 戻り値が `TodoRead` として成立しない場合（必須フィールドが欠けているなど）、**500** になる。422 ではない。422 は「クライアントの入力が悪い」、500 は「サーバの出力が仕様違反」
@@ -631,7 +650,7 @@ POST /todos の 201: {"schema": {"$ref": "#/components/schemas/TodoRead"}}
 GET  /todos の 200: {"schema": {}}                                        ← 空
 ```
 
-**既知スタックとの対応**: 対応物なし。Express も NestJS（`class-transformer` を足さない限り）も、戻り値を宣言しても実行時には何もしない。「返す型を書いたら本当にその形に絞られる」のは TS 側には無い挙動。
+**既知スタックとの対応**: 対応物なし。Express も NestJS（`class-transformer` を足さない限り）も、戻り値を宣言しても実行時には何もしない。「返す形を宣言したら本当にその形に絞られる」のは TS 側には無い挙動。
 
 **なぜこの設計なのか**: 出力の漏洩は**書き忘れでは気づけない**種類の事故だから。「余分なフィールドを消す」コードを各ハンドラに書く方式だと、新しい内部フィールドを1つ足した瞬間に全エンドポイントが漏洩候補になる。出口の形を宣言しておけば、**足したフィールドは既定で外に出ない**。
 根拠: https://fastapi.tiangolo.com/tutorial/response-model/
@@ -698,7 +717,7 @@ curl -i -X POST http://127.0.0.1:8000/todos \
 {"id":3,"title":"牛乳を買う","done":false}
 ```
 
-**`internal_note` が入っていない**。ハンドラは `record`（`internal_note` を含む dict）を返しているのに、`-> TodoRead` が出口で落としている。
+**`internal_note` が入っていない**。ハンドラは `record`（`internal_note` を含む dict）を返しているのに、`response_model=TodoRead` が出口で落としている。
 
 ```bash
 curl -s -X POST http://127.0.0.1:8000/todos -H "Content-Type: application/json" -d '{}'
@@ -728,7 +747,7 @@ curl -s http://127.0.0.1:8000/todos?limit=3
 [{"id":1,"title":"牛乳を買う","done":false,"internal_note":"社内メモ1"}, ...]
 ```
 
-**同じデータなのに POST では消え、GET では出る。** 差は `-> TodoRead` の有無だけ。これが P3-3 で回収する宿題になる。
+**同じデータなのに POST では消え、GET では出る。** 差はレスポンスモデルを宣言したかどうかだけ。これが P3-3 で回収する宿題になる。
 
 ブラウザで `http://127.0.0.1:8000/docs` を開く。`POST /todos` には Example Value とスキーマが出るが、`GET /todos` の応答は空のまま。
 
@@ -745,7 +764,7 @@ GET  /todos の 200: {"schema": {}}
 
 <details><summary>答え</summary>
 
-`-> TodoRead` があるため、FastAPI は戻り値をそのまま返さず、**`TodoRead` として作り直してから** JSON にする。`TodoRead` に `internal_note` フィールドが無いので落ちる。作り直しているのは **Pydantic**（登録したのは FastAPI）。`GET /todos` は戻り値の型を宣言していないので、この工程が無く、dict がそのまま出る。
+`response_model=TodoRead` があるため、FastAPI は戻り値をそのまま返さず、**`TodoRead` として作り直してから** JSON にする。`TodoRead` に `internal_note` フィールドが無いので落ちる。作り直しているのは **Pydantic**（登録したのは FastAPI）。`GET /todos` はレスポンスモデルを宣言していないので、この工程が無く、dict がそのまま出る。
 </details>
 
 **Q2.** `{"title":"z","id":999}` が 422 にならないのはなぜか。「余分なフィールドはエラー」にしたい場合は何が必要か。
@@ -757,7 +776,7 @@ Pydantic の既定は「知らないフィールドは無視」。必須が欠�
 エラーにしたい場合はモデル側の設定で「余分を禁止」に変えられる。ただし既定のままでも**値が通ることはない**ので、この教材では既定を使う。
 </details>
 
-**Q3.** `-> TodoRead` と宣言したのに、ハンドラが `{"title": "x"}`（`id` 無し）を返したらどうなるか。ステータスコードは。
+**Q3.** `response_model=TodoRead` と宣言したのに、ハンドラが `{"title": "x"}`（`id` 無し）を返したらどうなるか。ステータスコードは。
 
 <details><summary>答え</summary>
 
@@ -769,7 +788,7 @@ Pydantic の既定は「知らないフィールドは無視」。必須が欠�
 | トークン | 扱い |
 | --- | --- |
 | `BaseModel`（ボディ判定） | 3-2(a) で仕組み解剖 |
-| 戻り値アノテーション（レスポンスモデル） | 3-2(b) で仕組み解剖 |
+| `response_model`（レスポンスモデル） | 3-2(b) で仕組み解剖（`-> TodoRead` 形式との使い分けを含む） |
 | `status_code=201` | 3-2(c) で仕組み解剖 |
 | `.model_dump()` | 3-2(a) の範囲内で扱った（Pydantic モデル → dict の変換） |
 | `class` / 継承 | 3-3 で Python注 |
@@ -1035,4 +1054,322 @@ curl -s -X POST http://127.0.0.1:8000/todos \
 | `if not x`（真偽の扱い） | 4-3 で Python注 |
 | 422 の表示用整形 / `input` を落とす | ⏭️ **P5-3** で回収（例外ハンドラの一元化として実装） |
 | `GET` 系へのレスポンスモデル適用 | ⏭️ **P3-3** で回収（P1-3 から継続） |
+| `def` と `async def` の使い分け | ⏭️ **P3-1** で回収（P1-1 から継続） |
+
+---
+
+## P1-5: 更新と削除（CRUD 完成）
+
+**作るもの**: `PUT /todos/{todo_id}` と `DELETE /todos/{todo_id}`（204）。これで達成条件 (1) の CRUD 4種が揃う
+**重要度**: 🔴 毎日使う — 残り2つの動詞と、「本文を返さない応答」の書き方はどの API にも出る
+**前ステップとの接続**: P1-4 までで作成・一覧・取得ができている。`app/main.py` に `TodoUpdate` と2本のエンドポイントを足す
+
+### 5-0. このステップの初出トークン
+
+**FastAPI**: `@app.put` / `@app.delete` / `status` モジュールの定数 / 204 と本文なしレスポンス（3）
+**Python**: 継承による共通化 / `list.remove()` / 値を返さない `return`
+**周辺**: なし
+
+### 5-1. コード
+
+初出なので完成形。**追加は import 行・`TodoUpdate`・エンドポイント2本**（既存部分は変更なし）。
+
+```python
+# app/main.py — 追加分
+from fastapi import FastAPI, HTTPException, Query, status
+from pydantic import BaseModel, Field, field_validator
+
+
+class TodoBase(BaseModel):
+    """入力の共通部分。title の制約と検証はここに1回だけ書く"""
+
+    title: str = Field(min_length=1, max_length=100)
+
+    @field_validator("title")
+    @classmethod
+    def title_must_not_be_blank(cls, value: str) -> str:
+        trimmed = value.strip()
+        if not trimmed:
+            raise ValueError("空白だけのタイトルは登録できません")
+        return trimmed
+
+
+class TodoCreate(TodoBase):
+    """POST 用。done は省略できる"""
+
+    done: bool = False
+
+
+class TodoUpdate(TodoBase):
+    """PUT 用。全置換なので done も必須にする"""
+
+    done: bool
+
+
+@app.put("/todos/{todo_id}", response_model=TodoRead)
+def update_todo(todo_id: int, todo: TodoUpdate) -> Any:
+    for record in _todos:
+        if record["id"] == todo_id:
+            record["title"] = todo.title
+            record["done"] = todo.done
+            return record
+    raise HTTPException(status_code=404, detail="Todo not found")
+
+
+@app.delete("/todos/{todo_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_todo(todo_id: int) -> None:
+    for record in _todos:
+        if record["id"] == todo_id:
+            _todos.remove(record)
+            return
+    raise HTTPException(status_code=404, detail="Todo not found")
+```
+
+✅ 検証済み: Python 3.12.13 / FastAPI 0.141.1 / Pydantic 2.13.5
+（`TestClient` で6パターン + OpenAPI を実測。ボディはバイト列のまま確認した。結果は 5-6）
+
+| 行 | 何をしているか |
+| --- | --- |
+| `class TodoUpdate(TodoBase)` | `TodoBase` を継承。`title` の制約と検証器は**そのまま受け継ぐ** |
+| `done: bool` | 親の `done: bool = False` を**必須に上書き**する |
+| `def update_todo(todo_id: int, todo: TodoUpdate)` | パスパラメータとボディを**同時に**受け取る |
+| `status.HTTP_204_NO_CONTENT` | 数値 `204` と同じだが、名前で意味が読める |
+| `-> None` | 返すものが無い。FastAPI は本文を書かない |
+| `_todos.remove(record)` | list から要素を取り除く |
+
+### 5-2. 🔬 仕組み解剖
+
+#### (a) `@app.put` / `@app.delete` — 引数の分類は同じ規則で動く
+
+**正式名称**: パスオペレーションデコレータ。`get` / `post` / `put` / `delete` / `patch` などが同じ形で用意されている（P1-1 の仕組み解剖参照）。
+
+注目すべきは `update_todo` の引数が**2種類混ざっている**こと。
+
+```python
+def update_todo(todo_id: int, todo: TodoUpdate) -> Any:
+```
+
+P1-2 で立てた分類規則がそのまま効く。
+
+| 引数 | 規則 | 分類 |
+| --- | --- | --- |
+| `todo_id` | 1（名前がパステンプレートにある） | パスパラメータ |
+| `todo` | 3（型が Pydantic モデル） | リクエストボディ |
+
+**新しい規則は何も足されていない。** メソッドが増えても引数の読み方は1つ。これが P1-2 で個別の書き方ではなく「規則」として説明した理由。
+
+- **いつ評価されるか**: 起動時に1回（分類の確定）
+- **失敗したらどうなるか**: `/todos/abc` なら `loc:["path","todo_id"]`、ボディが不正なら `loc:["body",...]` の 422
+
+#### (b) `TodoBase` — 共通部分を親に置き、差分だけを子に書く
+
+Pydantic モデルは普通のクラスなので継承できる。**`Field` の制約も `field_validator` も自動的に引き継がれる。**
+
+実測: `PUT /todos/1` に `{"title":"   ","done":false}` を送ると、`TodoBase` に書いた検証器が動く。
+
+```json
+{"type":"value_error","loc":["body","title"],"msg":"Value error, 空白だけのタイトルは登録できません"}
+```
+
+`TodoUpdate` には検証器を1行も書いていないのに効いている。
+
+**3つのクラスの関係**
+
+```
+TodoBase   … title（制約と検証）        ← 入力に共通
+ ├ TodoCreate … + done: bool = False    ← POST。省略可
+ └ TodoUpdate … + done: bool            ← PUT。必須
+```
+
+`done` の扱いだけが違い、その違いがクラス構造にそのまま出ている。実測:
+
+```
+POST {"title":"x"}  (done 省略) -> 201  （既定 False が入る）
+PUT  {"title":"x"}  (done 省略) -> 422 {"type":"missing","loc":["body","done"]}
+```
+
+**なぜ更新では必須にするのか**: `PUT` は**リソース全体の置き換え**だから。省略を許して既定値 `False` を入れると、`done: true` の TODO に `{"title":"買い物"}` を送っただけで完了状態が消える。「送らなかった項目は変えない」という挙動が欲しい場合は `PUT` ではなく `PATCH` を使う。
+根拠: https://www.rfc-editor.org/rfc/rfc9110#name-put
+
+**なぜ `TodoUpdate(TodoCreate)` として `done` を上書きしないのか**
+
+一見、親を `TodoCreate` にして `done: bool` と書き直すほうが短い。実行時はそれでも動く。
+だが**型チェッカがエラーを出す**。
+
+```
+"done" overrides a field of the same name but is missing a default value
+```
+
+✅ 検証済み: Pyright 1.1 系での実測。Pydantic モデルはデータクラス相当として扱われ、
+「既定値のあるフィールドの既定値を継承で剥がす」ことが規則違反と判定される
+（Pydantic の `__init__` はキーワード専用なので実害は無く、だから実行時は動く）。
+
+共通部分を親に切り出せば**上書き自体が無くなる**ので、この問題は起きない。
+警告を抑えるためではなく、**「何が共通で何が違うのか」がクラス構造に現れる**のが本来の利点。
+根拠: https://docs.pydantic.dev/latest/concepts/models/#model-inheritance
+
+> ⏭️ **後で回収**: 部分更新（`PATCH`）はこの教材では作らない。必要な考え方（「未指定」と「null を指定」の区別）は **M3 のカバーしていないこと**で扱う。
+
+#### (c) `status.HTTP_204_NO_CONTENT` と本文なしレスポンス
+
+**正式名称**: `fastapi.status`。HTTP ステータスコードの定数を集めたモジュール（実体は Starlette のもの）。`status.HTTP_204_NO_CONTENT` は `204` そのもので、動作は変わらない。
+
+**なぜ定数を使うのか**: `204` という数字を見て「No Content」と即座に読める人は多いが、`422` や `409` になると怪しくなる。**エディタの補完が効く**点も大きい。
+
+**204 のとき実行時に何が起きるか**
+
+- 戻り値アノテーションが `-> None` で、ハンドラが値を返さない（`return` のみ）
+- FastAPI は**本文を1バイトも書かない**
+
+実測（バイト列のまま確認）:
+
+```
+DELETE /todos/2 -> 204
+  raw body: b''
+  headers: content-length ヘッダが無い
+```
+
+比較用に、404 のときは本文がある。
+
+```
+DELETE /todos/2 (2回目) -> 404
+  raw body: b'{"detail":"Todo not found"}'
+  content-length: 27
+```
+
+- **どのライブラリの責務か**: 204 の扱いは Starlette のレスポンス生成、判断は FastAPI
+- **失敗したらどうなるか**: 204 を指定したハンドラが**値を返してしまう**と、本文のあるレスポンスを作ろうとして矛盾する。`-> None` を書いておくと、型の上でも返せないことが明示される
+
+OpenAPI にも「本文なし」として出る。実測:
+
+```json
+"204": { "description": "Successful Response" }      ← content キーが無い
+```
+
+**既知スタックとの対応**: Express の `res.sendStatus(204)` に相当。違いは、FastAPI 側は**宣言（デコレータ引数）で決まる**ので `/docs` にも自動で反映されること。
+根拠: https://www.rfc-editor.org/rfc/rfc9110#name-204-no-content
+
+### 5-3. 🐍 Python注 ／ 🧩 周辺注
+
+> 🐍 **Python注**: `class TodoCreate(TodoBase):` は継承。親の属性をすべて受け継ぎ、子で書いた分が足される。TS の `extends` と同じ。
+
+> 🐍 **Python注**: `_todos.remove(record)` は list から**最初に一致した要素**を取り除く。JS の `arr.splice(arr.indexOf(x), 1)` に相当。
+
+> 🐍 **Python注**: 値を書かない `return` は「ここで関数を終える」の意味で、`None` を返したのと同じ。
+
+> 🧩 **周辺注**: このステップでも Docker / MySQL / Alembic は使わない。
+
+### 5-4. 解説 — なぜこう設計するか
+
+**ループ中に list を変更している点について。** `delete_todo` は `for` で回しながら `remove` しているが、**`return` で即座に抜けるので安全**。抜けずに回し続けると、要素が詰まってインデックスがずれ、次の要素を飛ばす。「消したら抜ける」を守ること。
+
+**404 を返すか 204 を返すか。** 存在しない TODO への `DELETE` は、2回目以降 404 になる（実測）。「`DELETE` は冪等（idempotent）なのに 404 なのは矛盾では」と思うかもしれないが、冪等性が保証するのは**サーバの状態**であって**ステータスコード**ではない。何度呼んでも「その TODO が無い」状態は同じなので、冪等性は満たしている。
+根拠: https://www.rfc-editor.org/rfc/rfc9110#name-idempotent-methods
+
+> 🧠 **FastAPI の考え方**: メソッドが増えても読み方は増えない。`get` が `put` になっても、引数の分類規則も検証の走り方も同じ。**覚える規則を増やさない**のが FastAPI の一貫した設計。
+
+### 5-5. 🏢 実務メモ ／ ⚠️ アンチパターン
+
+> 🏢 **実務メモ**: `204 No Content` のレスポンスに本文を入れてはいけない。仕様上「本文を含まない」と定義されており、入れた場合の挙動はプロキシやクライアントによって割れる（無視される／接続が壊れる）。「削除しました」というメッセージを返したいなら 204 ではなく 200 を選ぶ。
+> 根拠: https://www.rfc-editor.org/rfc/rfc9110#name-204-no-content
+
+> ⚠️ **アンチパターン**: `PUT` の入力モデルで項目を省略可にする。`{"title":"買い物"}` だけを送れてしまうと、既存の `done: true` が既定値の `False` で上書きされ、**送っていない項目が勝手に変わる**。`PUT` は全置換なので入力も全項目必須にし、部分更新が要るなら `PATCH` を別に用意する。
+> 根拠: https://www.rfc-editor.org/rfc/rfc9110#name-put
+
+### 5-6. 🔮 予測 → 動作確認
+
+**先に予想を書いてから叩く。**
+
+1. `TodoUpdate` には検証器を1行も書いていない。`{"title":"   ","done":false}` を PUT したらどうなるか
+2. `{"title":"x"}`（`done` を省略）を PUT したら 200 か 422 か
+3. `DELETE` が成功したときのレスポンス本文は何バイトか。2回続けて削除したら2回目は何が返るか
+
+---
+
+```bash
+curl -s -X PUT http://127.0.0.1:8000/todos/1 \
+  -H "Content-Type: application/json" -d '{"title":"牛乳と卵","done":true}'
+```
+
+✅ 検証済み: `200`、`internal_note` は落ちている（`response_model=TodoRead` が効いている）
+
+```json
+{"id":1,"title":"牛乳と卵","done":true}
+```
+
+```bash
+curl -s -X PUT http://127.0.0.1:8000/todos/1 -H "Content-Type: application/json" -d '{"title":"x"}'
+curl -s -X PUT http://127.0.0.1:8000/todos/1 -H "Content-Type: application/json" -d '{"title":"   ","done":false}'
+curl -s -X PUT http://127.0.0.1:8000/todos/999 -H "Content-Type: application/json" -d '{"title":"y","done":false}'
+```
+
+✅ 検証済み: 実際の結果
+
+| 送ったもの | 結果 | 何が起きたか |
+| --- | --- | --- |
+| `{"title":"x"}` | **422** `{"type":"missing","loc":["body","done"]}` | 親の `= False` を**上書きして必須にした**効果 |
+| `{"title":"   ","done":false}` | **422** `{"type":"value_error",...}` | `TodoCreate` の検証器が**継承されている** |
+| `/todos/999` | **404** `{"detail":"Todo not found"}` | ボディは正しいので 422 ではない |
+
+```bash
+curl -s -i -X DELETE http://127.0.0.1:8000/todos/2
+curl -s -i -X DELETE http://127.0.0.1:8000/todos/2
+```
+
+✅ 検証済み: 1回目と2回目で明確に違う
+
+| 回 | ステータス | 本文 | ヘッダ |
+| --- | --- | --- | --- |
+| 1回目 | **204** | `b''`（0バイト） | `content-length` が**無い** |
+| 2回目 | **404** | `b'{"detail":"Todo not found"}'` | `content-length: 27` |
+
+`-> None` と `status_code=204` の組み合わせで、FastAPI は**本文を1バイトも書かない**。
+
+これで CRUD 4種が揃った。**達成条件 (1) の前半（メモリ上で動く）がここで満たされる。**
+
+```bash
+curl -s -X POST http://127.0.0.1:8000/todos -H "Content-Type: application/json" -d '{"title":"新規"}'   # C
+curl -s http://127.0.0.1:8000/todos                                                                     # R
+curl -s -X PUT http://127.0.0.1:8000/todos/1 -H "Content-Type: application/json" -d '{"title":"更新","done":true}'  # U
+curl -s -i -X DELETE http://127.0.0.1:8000/todos/1                                                      # D
+```
+
+### 5-7. ✅ 想起チェック
+
+**Q1.** `TodoUpdate` に `field_validator` を1行も書いていないのに、空白だけの `title` が弾かれるのはなぜか。
+
+<details><summary>答え</summary>
+
+`TodoUpdate` は `TodoBase` を**継承**しているため。Pydantic モデルは普通の Python クラスなので、`Field` の制約（`min_length` / `max_length`）も `field_validator` で登録した検証器も、そのまま受け継がれる。子で足したのは `done` だけ。
+</details>
+
+**Q2.** `TodoUpdate` で `done: bool` を必須にしているのはなぜか。省略可にすると何が起きるか。
+
+<details><summary>答え</summary>
+
+`PUT` が**全置換**だから。省略可（既定 `False`）にすると `{"title":"買い物"}` だけの PUT が通ってしまい、`done: true` だった TODO が `False` で上書きされる。**送っていない項目が勝手に変わる**という事故になる。`TodoCreate` 側が省略可なのは、作成時には「まだ完了していない」が自然な既定だから。
+</details>
+
+**Q3.** `DELETE` を2回呼ぶと 204 → 404 と変わる。これは「`DELETE` は冪等」に反しないか。
+
+<details><summary>答え</summary>
+
+反しない。冪等性が保証するのは**サーバの状態**であって、返るステータスコードではない。何回呼んでも「その TODO が存在しない」という状態は同じなので、冪等性は満たしている。
+</details>
+
+### 5-8. 初出トークンの回収確認
+
+| トークン | 扱い |
+| --- | --- |
+| `@app.put` / `@app.delete` | 5-2(a) で仕組み解剖（P1-1 の `@app.get` と同じ機構であることを確認） |
+| `response_model=` の再登場 | P1-3 の 3-2(b) 参照（`-> Any` との組み合わせも同じ） |
+| `status` モジュールの定数 | 5-2(c) で仕組み解剖 |
+| 204 と本文なしレスポンス（`-> None`） | 5-2(c) で仕組み解剖 |
+| 継承による共通化（`TodoBase`） | 5-2(b) で仕組み解剖 + 5-3 で Python注 |
+| `list.remove()` | 5-3 で Python注 |
+| 値を返さない `return` | 5-3 で Python注 |
+| **達成条件 (1) CRUD 4種** | ✅ **本ステップで達成**（メモリ上。P3-4 で MySQL 版を再達成） |
+| `PATCH` による部分更新 | ⏭️ **M3 のカバーしていないこと**で扱う（5-2(b) で宣言済み） |
+| `GET` 系へのレスポンスモデル適用 | ⏭️ **P3-3** で回収（P1-3 から継続） |
+| 422 の表示用整形 | ⏭️ **P5-3** で回収（P1-4 から継続） |
 | `def` と `async def` の使い分け | ⏭️ **P3-1** で回収（P1-1 から継続） |
