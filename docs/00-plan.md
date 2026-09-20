@@ -129,6 +129,8 @@ docker run --rm hello-world                 # 実際にコンテナを1つ起動
 
 ```text
 roadmap-sh-fastapi/
+├── .zed/
+│   └── debug.json              # Zed のデバッグ設定（docs/debugging.md 参照）
 ├── pyproject.toml              # 依存の宣言（P1-1 以降、各フェーズで uv add が追記）
 ├── uv.lock                     # 依存の正確なバージョン
 ├── .python-version             # 3.12
@@ -178,6 +180,7 @@ roadmap-sh-fastapi/
 │   └── test_auth.py                    [P6-4]
 └── docs/
     ├── 00-plan.md              # このファイル
+    ├── debugging.md            # Zed + iTerm2 でのデバッグ / 実行SQLの確認
     ├── p1-basics.md            # P1 の全ステップ + フェーズ末パック
     ├── p2-environment.md
     ├── p3-persistence.md
@@ -187,7 +190,7 @@ roadmap-sh-fastapi/
     └── 99-wrapup.md            # M3
 ```
 
-⚠️ 未実行（これは P6 終了時の**予定図**であり、現時点で存在するのは `pyproject.toml` / `uv.lock` / `.python-version` / `.gitignore` / `README.md` / `docs/00-plan.md` のみ。検証手順: 各ステップ末で `find . -not -path './.venv/*' -not -path './.git/*' -type f | sort` を実行し、この図との差分を確認する）
+⚠️ 未実行（これは P6 終了時の**予定図**であり、現時点で存在するのは `pyproject.toml` / `uv.lock` / `.python-version` / `.gitignore` / `README.md` / `.zed/debug.json` / `docs/` 配下のみ。検証手順: 各ステップ末で `find . -not -path './.venv/*' -not -path './.git/*' -type f | sort` を実行し、この図との差分を確認する）
 
 **`models/` と `schemas/` を最初から分けている理由**: P3 の主題が「テーブルの形」と「API の形」を別物として扱うことだから。同じ `Todo` でも、DB には `hashed_password` のような外に出してはいけない列があり、API には DB に無い計算済みフィールドがある。1クラスに兼ねさせると、この差が表現できない。
 

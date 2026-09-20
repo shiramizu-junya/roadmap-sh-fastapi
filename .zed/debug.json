@@ -1,0 +1,50 @@
+// FastAPI のデバッグ設定
+//
+// サーバは iTerm2 で起動し、Zed は「接続(attach)」する。
+// 起動コマンドと詳しい手順は docs/debugging.md を参照。
+//
+// 前提: uv add --dev debugpy
+[
+  {
+    // 通常はこれ。iTerm2 で起動済みのサーバに接続する。
+    // リロードで子プロセスが作り直されても、5678 は親が握り続けるので繋ぎ直し不要。
+    "label": "FastAPI に接続 (iTerm2)",
+    "adapter": "Debugpy",
+    "request": "attach",
+    "connect": { "host": "127.0.0.1", "port": 5678 },
+    "cwd": "$ZED_WORKTREE_ROOT",
+    // false にすると FastAPI / Starlette / Pydantic の内部にも踏み込める
+    "justMyCode": false,
+    // uvicorn --reload の子プロセスにデバッガを注入する。reload 運用ではこれが要
+    "subProcess": true
+  },
+  {
+    // Zed 側からサーバごと起動したいとき（iTerm2 を使わない場合）
+    "label": "FastAPI を起動 (Zed から)",
+    "adapter": "Debugpy",
+    "request": "launch",
+    "module": "uvicorn",
+    "args": [
+      "app.main:app",
+      "--host", "127.0.0.1",
+      "--port", "8000",
+      "--reload",
+      "--reload-dir", "app"
+    ],
+    "cwd": "$ZED_WORKTREE_ROOT",
+    "justMyCode": false,
+    "subProcess": true,
+    "env": { "PYDEVD_DISABLE_FILE_VALIDATION": "1" }
+  },
+  {
+    // P6 用。テストを止めて追う
+    "label": "pytest",
+    "adapter": "Debugpy",
+    "request": "launch",
+    "module": "pytest",
+    "args": ["-q"],
+    "cwd": "$ZED_WORKTREE_ROOT",
+    "justMyCode": false,
+    "env": { "PYDEVD_DISABLE_FILE_VALIDATION": "1" }
+  }
+]
