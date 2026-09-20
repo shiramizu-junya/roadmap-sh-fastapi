@@ -1,16 +1,15 @@
-from typing import Annotated
+from typing import Annotated, Any
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, status
 from pydantic import BaseModel, Field, field_validator
 
 app = FastAPI()
 
 
-class TodoCreate(BaseModel):
-    """クライアントから受け取る形。id はサーバが決めるので含めない"""
+class TodoBase(BaseModel):
+    """入力の共通部分。title の制約と検証はここに1回だけ書く"""
 
     title: str = Field(min_length=1, max_length=100)
-    done: bool = False
 
     @field_validator("title")
     @classmethod
@@ -19,6 +18,18 @@ class TodoCreate(BaseModel):
         if not trimmed:
             raise ValueError("空白だけのタイトルは登録できません")
         return trimmed
+
+
+class TodoCreate(TodoBase):
+    """POST 用。id はサーバが決めるので含めない。done は省略できる"""
+
+    done: bool = False
+
+
+class TodoUpdate(TodoBase):
+    """PUT 用。全置換なので done も必須にする"""
+
+    done: bool
 
 
 class TodoRead(BaseModel):
@@ -50,8 +61,8 @@ def list_todos(
     return items[:limit]
 
 
-@app.post("/todos", status_code=201)
-def create_todo(todo: TodoCreate) -> TodoRead:
+@app.post("/todos", response_model=TodoRead, status_code=201)
+def create_todo(todo: TodoCreate) -> Any:
     new_id = max([t["id"] for t in _todos], default=0) + 1
     record = todo.model_dump()
     record["id"] = new_id
@@ -65,4 +76,22 @@ def get_todo(todo_id: int):
     for todo in _todos:
         if todo["id"] == todo_id:
             return todo
+    raise HTTPException(status_code=404, detail="Todo not found")
+
+
+@app.put("/todos/{todo_id}", response_model=TodoRead)
+def update_todo(todo_id: int, todo: TodoUpdate) -> Any:
+    for record in _todos:
+        if record["id"] == todo_id:
+            record["title"] = todo.title
+            record["done"] = todo.done
+            return record
+    raise HTTPException(status_code=404, detail="Todo not found")
+
+@app.delete("/todos/{todo_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_todo(todo_id: int) -> None:
+    for record in _todos:
+        if record["id"] == todo_id:
+            _todos.remove(record)
+            return
     raise HTTPException(status_code=404, detail="Todo not found")
