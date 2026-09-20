@@ -56,12 +56,55 @@ uv run python -m debugpy --listen 127.0.0.1:5678 --wait-for-client \
 
 ## 3. Zed から接続する
 
-1. 止めたい行の**行番号の左**（ガター）をクリック → 赤丸が付く
-2. `F4` でデバッグパネルを開く
-3. **「FastAPI に接続 (iTerm2)」** を選んで実行
-4. 別ターミナルで `curl http://127.0.0.1:8000/todos/2` などを叩く → 赤丸の行で止まる
+> ⚠️ **必ず「サーバが先、Zed が後」**。順番を逆にすると次節の衝突が起きる。
+
+1. iTerm2 側に `Application startup complete.` が出ているのを確認する
+2. 止めたい行の**行番号の左**（ガター）をクリック → 赤丸が付く
+3. `F4` でデバッグパネルを開く
+4. **「FastAPI に接続 (iTerm2)」** を選んで実行
+5. 別ターミナルで `curl http://127.0.0.1:8000/todos/2` などを叩く → 赤丸の行で止まる
 
 ⚠️ 未実行（Zed の画面操作のため、実機確認は各自）
+
+### `Address already in use`（5678 番）が出たら
+
+```
+RuntimeError: Can't listen for client connections: [Errno 48] Address already in use
+```
+
+**Zed のデバッグセッションを先に開始してしまった場合に出る。**
+5678 は「サーバ側が開いて、Zed が繋ぎに行く」ポートなので、繋ぎ先が無い状態で Zed を起動すると、
+Zed が立てた `debugpy/adapter` がポートを確保したまま待機に入り、後から来たサーバが弾かれる。
+
+| | 役割 |
+| --- | --- |
+| iTerm2 の `--listen 127.0.0.1:5678` | ポートを**開いて待つ**側 |
+| Zed の `"connect": { "port": 5678 }` | そこへ**繋ぎに行く**側 |
+
+対処:
+
+```bash
+lsof -nP -iTCP:5678          # 誰が握っているか確認
+```
+
+Zed のデバッグパネルで停止（■）する。UI で見つからなければアダプタの PID を直接終了する。
+
+✅ 検証済み: この状態のとき `lsof` には Zed 本体と `debugpy/adapter --for-server ... --port 5678` の
+2つが並んで見える
+
+### どうしても衝突する場合は役割を逆にする
+
+Zed 側を待ち受けにし、サーバから繋ぎに行く形にすると、起動順の制約が消える。
+
+```bash
+# iTerm2: --listen ではなく --connect
+uv run python -m debugpy --connect 127.0.0.1:5678 \
+  -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload --reload-dir app
+```
+
+このとき `.zed/debug.json` の `"connect"` を `"listen"` に変える。
+
+⚠️ 未実行（順番を守れば不要なため、必要になったときに検証する）
 
 ---
 
