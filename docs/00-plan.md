@@ -308,7 +308,7 @@ flowchart LR
 | --- | --- | --- | --- | --- |
 | P1-6 | **生成された仕様書を読む** | `/openapi.json` を `jq` で読み解く。`/docs` で Try it out | `GET /openapi.json`, `components.schemas` と `$ref`, `tags=` / `summary=` | 🔴 |
 | P1-7 | 残りの CRUD と 404 | `GET /todos/{id}` `PUT` `DELETE` が揃う | `HTTPException`, `status` 定数, `responses=`（スキーマへの宣言） | 🔴 |
-| P1-8 | ルーター分割と依存性注入 | `app/routers/todos.py` に切り出し、共通処理を注入。**`__init__.py` と import がここで本番** | `APIRouter`, `include_router()`, `Depends()` | 🔴 |
+| P1-8 | ルーター分割と依存性注入 | `app/routers/todos.py` に切り出し、共通処理を注入。**`__init__.py` と import がここで本番**。**`app.routes` で経路一覧を確認**（`prefix` の付き方を目で見る） | `APIRouter`, `include_router()`, `Depends()` | 🔴 |
 | P1-9 | Zed からブレークポイントで止める | `.zed/debug.json`。`POST /todos` を止めてボディを覗く | —（debugpy / attach） | 🔴 |
 
 #### P1 で扱う「Python の道具立て」（§4.3.1）
@@ -322,6 +322,11 @@ flowchart LR
 | トレースバックの読み方（**下から読む**） | **P1-2** | 読まずに勘で直す癖がつき、以後すべてのステップの効率が落ちる |
 | インデントエラー（`IndentationError` / `TabError`） | **P1-2** | 動かない理由が見た目に出ないので原因に辿り着けない |
 | パッケージと import（`__init__.py`） | P1-2 で予告 → **P1-8 で本番** | ファイル分割の瞬間に import が壊れ、どこを直すか分からなくなる |
+
+> **P1-8 でルート一覧の確認を扱う。** P1-2 の なぜなぜ③ で「経路を関数の真上に貼ると**一覧性**を失う」と提示した。
+> 手当ては2つあり、**P1-6** が `/openapi.json`（起動して見る）、**P1-8** が `app.routes`（起動せずに見る）。
+> ルーターに分割すると経路がファイルをまたぐので、`include_router(prefix=...)` の付け間違いはここで一番起きやすい。
+> `fastapi` CLI は使わない（`dev` と `run` しか無く、`routes` のようなコマンドは存在しない。§2.4）。
 
 > **P1-2 では `async def` の予告も入れる**（§4.7）。公式チュートリアルは最初の例から `async def` だが、
 > 本教材は `def` で統一する。予告が無いと、公式を開いた読者が「自分が間違えた」と思って勝手に直してしまう。
@@ -497,7 +502,7 @@ MySQL は本編とポートを分けるか DB 名を分けて同一インスタ�
 
 | 出どころ | 扱わない主要項目 | 一次情報 |
 | --- | --- | --- |
-| FastAPI | 非同期DB（`async` ドライバ / `AsyncSession`）、WebSocket、`BackgroundTasks`、`Lifespan`、`SecurityScopes` による細かい権限、サブアプリのマウント、GraphQL | https://fastapi.tiangolo.com/learn/ |
+| FastAPI | 非同期DB（`async` ドライバ / `AsyncSession`）、WebSocket、`BackgroundTasks`、`Lifespan`、`SecurityScopes` による細かい権限、サブアプリのマウント、GraphQL、**`fastapi` CLI（`fastapi dev` / `fastapi run`）** | https://fastapi.tiangolo.com/learn/ |
 | Pydantic | カスタムバリデータ（`field_validator` / `model_validator`）、`Discriminated Union`、シリアライザのカスタマイズ、`TypeAdapter` | https://docs.pydantic.dev/latest/ |
 | Starlette | Starlette 単体での利用、`Request` / `Response` の低レベル操作、`StreamingResponse`、テンプレート、静的ファイル配信 | https://www.starlette.io/ |
 | SQLAlchemy | Core（Expression Language 単体）、多対多と関連テーブル、`joinedload` / `subqueryload` の使い分け、複合インデックス、`AsyncSession` | https://docs.sqlalchemy.org/en/20/ |
