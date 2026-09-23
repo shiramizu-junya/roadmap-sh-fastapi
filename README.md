@@ -35,7 +35,7 @@ docs/_prompt.md を読んで、M0 を実行して
 
 | Ph | 内容 | 状態 | プロジェクト |
 |---|---|---|---|
-| P1a | 品質ゲート + FastAPI 基礎（ルーティング / Pydantic） | **P1-2 完了**（5ステップ中2） | — |
+| P1a | 品質ゲート + FastAPI 基礎（ルーティング / Pydantic） | **P1-3 完了**（5ステップ中3） | — |
 | P1b | OpenAPI と Swagger UI の読み方 / DI / デバッガ | 未着手 | — |
 | P2 | 環境と設定（Docker MySQL / pydantic-settings） | 未着手 | — |
 | P3 | ORM で永続化（SQLAlchemy 2.0 / Alembic） | 未着手 | — |
@@ -44,7 +44,7 @@ docs/_prompt.md を読んで、M0 を実行して
 | P6 | テスト（pytest / TestClient） | 未着手 | PJ2 |
 | 総仕上げ | — | 未着手 | PJ3 |
 
-**次の一手**: `M1: P1 ステップ3`（パスとクエリの受け取り）
+**次の一手**: `M1: P1 ステップ4`（リクエストボディと 422）
 
 教材は `docs/p1a-basics.md`。
 

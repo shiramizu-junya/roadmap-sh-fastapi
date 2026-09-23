@@ -298,7 +298,7 @@ flowchart LR
 | --- | --- | --- | --- | --- |
 | P1-1 | 品質ゲートを先に立てる | `pyproject.toml` / `.pre-commit-config.yaml`。壊れたコードがコミットできない | —（uv / ruff / mypy / pre-commit） | 🔴 |
 | P1-2 | 最小のエンドポイント | `GET /health` が 200 を返す。**わざと1回失敗させてエラーを読む** | `FastAPI()`, `@app.get()`, `uvicorn app.main:app` | 🔴 |
-| P1-3 | パスとクエリの受け取り | `GET /items/{id}?q=` が型変換される | パスパラメータ宣言, `Query()`, 型変換の失敗と 422 | 🔴 |
+| P1-3 | パスとクエリの受け取り | `GET /items/{id}?q=` が型変換される。**経路の順序も実際に踏む** | パスパラメータ宣言, `Query()`, 422 の自動応答 | 🔴 |
 | P1-4 | リクエストボディと 422 | `POST /todos` が Pydantic で検証される | `BaseModel`（ボディ判定）, 422 の自動応答, `Field()` | 🔴 |
 | P1-5 | 返す形を宣言する | `TodoCreate` / `TodoRead` を分け、201 を返す | `response_model`, `status_code`, `model_config` | 🔴 |
 
@@ -322,6 +322,10 @@ flowchart LR
 | トレースバックの読み方（**下から読む**） | **P1-2** | 読まずに勘で直す癖がつき、以後すべてのステップの効率が落ちる |
 | インデントエラー（`IndentationError` / `TabError`） | **P1-2** | 動かない理由が見た目に出ないので原因に辿り着けない |
 | パッケージと import（`__init__.py`） | P1-2 で予告 → **P1-8 で本番** | ファイル分割の瞬間に import が壊れ、どこを直すか分からなくなる |
+
+> **`Annotated` は P1-3 で前倒しした**（当初は P3-1 の初出予定）。公式が推奨する書き方が
+> `Annotated[str | None, Query(...)]` であり、**先に古い形を教えて後で乗り換えるのは `async def` と同じ失敗**になるため。
+> P3-1 の `Annotated[Session, Depends(...)]` は2度目の登場となり、1行の復習で済む（§4.3）。
 
 > **P1-8 でルート一覧の確認を扱う。** P1-2 の なぜなぜ③ で「経路を関数の真上に貼ると**一覧性**を失う」と提示した。
 > 手当ては2つあり、**P1-6** が `/openapi.json`（起動して見る）、**P1-8** が `app.routes`（起動せずに見る）。
@@ -384,7 +388,7 @@ Alembic は**スキーマ変更という設計判断そのもの**を扱う道�
 
 | # | タイトル | 作るもの | 初出（FastAPI） | 重要度 |
 | --- | --- | --- | --- | --- |
-| P3-1 | Session をリクエストごとに配る | `app/database.py` / `get_db` 依存。**`echo=True` で SQL を見えるようにする**（§4.15） | `yield` を使う依存, `Annotated[Session, Depends(...)]`, `def` と `async def` の判断（§4.7 を1回だけ厚く） | 🔴 |
+| P3-1 | Session をリクエストごとに配る | `app/database.py` / `get_db` 依存。**`echo=True` で SQL を見えるようにする**（§4.15） | `yield` を使う依存, `Depends()` との組み合わせ（`Annotated` は **P1-3 で既出**）, `def` と `async def` の判断（§4.7 を1回だけ厚く） | 🔴 |
 | P3-2 | テーブルを ORM モデルで定義する | `app/models/todo.py` | —（`DeclarativeBase` / `Mapped` / `mapped_column`）+ mypy を1段締める | 🔴 |
 | P3-3 | Alembic を繋いで最初の1本を当てる | `alembic/` / `versions/0001_*.py` | —（`target_metadata` / `--autogenerate` / `upgrade` / `downgrade` を厚く） | 🔴 |
 | P3-4 | CRUD をメモリから DB に差し替える | `app/routers/todos.py` の中身が全部入れ替わる | `from_attributes`（ORM → スキーマ変換）, `select()` の結果を返す, コミット境界と例外 | 🔴 |
