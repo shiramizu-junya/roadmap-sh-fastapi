@@ -14,3 +14,18 @@ dev = [
     "pre-commit>=4.6.2",
     "ruff>=0.16.8",
 ]
+
+[tool.ruff]
+# 1行の長さの上限。ruff format がこの幅で折り返す
+line-length = 100
+# 3.12 として解釈する（古い書き方を「古い」と判定できるようになる）
+target-version = "py312"
+
+[tool.ruff.lint]
+# E: 書き方の統一 / F: 実際のバグ / I: import の並び順
+select = ["E", "F", "I"]
+
+[tool.mypy]
+python_version = "3.12"
+# 型の付いていない関数定義を許さない（P1 の段階ではこれだけ）
+disallow_untyped_defs = true

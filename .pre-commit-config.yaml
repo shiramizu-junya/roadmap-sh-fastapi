@@ -1,0 +1,24 @@
+# コミットのたびに何を走らせるかの一覧
+repos:
+  - repo: local
+    hooks:
+      - id: ruff-check
+        name: ruff (lint) — バグと書き方を見る
+        entry: uv run ruff check --fix
+        language: system
+        types_or: [python, pyi]
+        require_serial: true
+
+      - id: ruff-format
+        name: ruff (format) — 見た目を揃える
+        entry: uv run ruff format
+        language: system
+        types_or: [python, pyi]
+        require_serial: true
+
+      - id: mypy
+        name: mypy — 型が合っているか見る
+        entry: uv run mypy
+        language: system
+        types_or: [python, pyi]
+        require_serial: true
