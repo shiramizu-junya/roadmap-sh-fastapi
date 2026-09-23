@@ -26,7 +26,8 @@ FastAPI / Pydantic / SQLAlchemy / Alembic / pytest の API を、**1項目1行**
 
 | 記法 | 読み方 | 要するに | 説明した場所 |
 | --- | --- | --- | --- |
-| _（P1-4 から追記していく）_ | | | |
+| `class X(BaseModel):` | ベース・モデル | 申込用紙のひな形。引数の型にするとボディになる | **P1-4 / 4-2a** |
+| `Field(min_length=1, max_length=200)` | フィールド | 用紙の1つの欄への注文 | **P1-4 / 4-2a** |
 
 ## SQLAlchemy — 「表の形」を書き、SQL を組み立てる道具
 
@@ -51,6 +52,7 @@ FastAPI / Pydantic / SQLAlchemy / Alembic / pytest の API を、**1項目1行**
 | `@app.get("/x/{id}")` | なみかっこ・アイディー | 住所を穴あきにした貼り紙。**固定パスより後ろに書かない** | **P1-3 / 3-2a** |
 | `Query(max_length=20)` | クエリ | `?` の後ろから来る値への注文票 | **P1-3 / 3-2a** |
 | 422 の `loc` | ロック | どこで落ちたか。`path` / `query` / `body` の3種類 | **P1-3 / 3-2** |
+| `@app.post("/path")` | アット・アップ・ドット・ポスト | 送ってきたものを受け取る窓口の貼り紙 | **P1-4 / 4-2a** |
 
 ## pytest
 

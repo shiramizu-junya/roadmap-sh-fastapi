@@ -1419,3 +1419,572 @@ GET /items/42      → {"item_id":42,"q":null} status=200
 
 **次のステップ**: P1-4「リクエストボディと 422」。`POST /todos` を作り、**Pydantic モデル**で
 ボディを受け取る。`loc` の3つ目 `body` がここで出る。`/items/` は役目を終えるので**削除する**。
+
+---
+
+## P1-4: リクエストボディと 422
+
+**作るもの**: `POST /todos` が JSON のボディを **Pydantic モデル**で受け取り、形が違えば 422 を返す
+**重要度**: 🔴 毎日使う — データを「送って作る」エンドポイントは、すべてこの形で入口を作るため
+**前ステップとの接続**: P1-3 の `loc` の3種類のうち、最後の **`body`** がここで出る。練習用の `/items/` は**削除する**
+
+### 4-0. このステップの初出トークン
+
+| 系統 | トークン |
+| --- | --- |
+| **FastAPI** | `@app.post()` / `BaseModel` を引数に書く（**ボディ判定**）/ `Field()`（3つ = 上限） |
+| **Python** | `class`（クラスの定義）/ `(BaseModel)`（継承）/ クラスの中の `名前: 型` / `bool` と `True` / `False` / `list[...]` と `[]` / `.append()` / `#`（コメント）/ `.` 区切りの import |
+| **【道具】** | —（該当なし） |
+| **周辺** | — |
+
+> 422 の自動応答は **P1-3 で既出**（今回はその `body` 版）。`Annotated` も2度目なので1行の復習で済ませる。
+
+---
+
+### 4-1. コード
+
+#### (1) `app/schemas/__init__.py` — **新規作成・中身は空**
+
+```bash
+mkdir -p app/schemas
+touch app/schemas/__init__.py
+```
+
+P1-2 の `app/__init__.py` と同じ札（2-3a(1) 参照）。`app/schemas/` も部品置き場にする。
+
+#### (2) `app/schemas/todo.py` — **新規作成・全文**
+
+```python
+from typing import Annotated
+
+from pydantic import BaseModel, Field
+
+
+class TodoCreate(BaseModel):
+    title: Annotated[str, Field(min_length=1, max_length=200)]
+    done: bool = False
+```
+
+#### (3) `app/main.py` — **全文**（`/items/` を削除し、`/todos` を追加）
+
+```python
+from fastapi import FastAPI
+
+from app.schemas.todo import TodoCreate
+
+app = FastAPI()
+
+# 教材用の置き場所。サーバを止めると消える（P3 で MySQL に置き換える）
+todos: list[TodoCreate] = []
+
+
+@app.get("/health")
+def health() -> dict[str, str]:
+    return {"status": "ok"}
+
+
+@app.post("/todos")
+def create_todo(todo: TodoCreate) -> TodoCreate:
+    todos.append(todo)
+    return todo
+
+
+@app.get("/todos")
+def list_todos() -> list[TodoCreate]:
+    return todos
+```
+
+✅ 検証済み: Python 3.12.13 / FastAPI 0.141.1 / Pydantic 2.13.5 / uvicorn 0.53.0。
+`uv run ruff check app/` = `All checks passed!`、`uv run ruff format --check app/` = `4 files already formatted`、
+`uv run mypy app/` = `Success: no issues found in 4 source files`。実レスポンスは 4-6。
+
+> 💡 **補足**: `GET /todos` は**確認用**に足した。422 のとき「ハンドラが本当に呼ばれていないか」を、
+> **リストに増えていないこと**で確かめるため（4-6 の Q1）。
+
+> 💡 **補足**: 戻り値の `-> TodoCreate` は、今は「受け取ったものをそのまま返す」ための仮の形。
+> **ID が無い**のが気になるはずで、それが P1-5 の主題（`TodoCreate` と `TodoRead` を分ける）。
+
+---
+
+### 4-1b. 📊 図解
+
+#### (a) 誰が何を持っているか（Pydantic が初めて表に出る回・§4.13）
+
+```mermaid
+flowchart LR
+    subgraph fa["FastAPI の仕事"]
+        SORT["引数を振り分ける<br/>path / query / body"]
+        ERR["失敗を 422 に組み立てる"]
+    end
+    subgraph pd["Pydantic の仕事"]
+        MODEL["TodoCreate<br/>形の設計図"]
+        CHECK["JSON を検証して<br/>TodoCreate に詰める"]
+    end
+    SORT -->|"body の中身を渡す"| CHECK
+    MODEL -.->|"設計図を読む"| CHECK
+    CHECK -->|"全部の失敗をまとめて返す"| ERR
+```
+
+✅ 描画確認済み: mermaid 12.0.0 でパース通過。
+
+**あなたが書くのは `TodoCreate`（設計図）だけ。** 検証を動かすのは Pydantic、
+それを HTTP の 422 に変えるのは FastAPI。**Pydantic 自身は HTTP を知らない**（P2-2 では設定ファイルの検証にも使う）。
+
+#### (b) 失敗したとき、どこまで届くか
+
+```mermaid
+sequenceDiagram
+    participant C as curl
+    participant F as FastAPI
+    participant P as Pydantic
+    participant H as create_todo()
+    participant L as todos リスト
+
+    C->>F: POST /todos {"title": 123}
+    F->>P: body を TodoCreate として検証
+    alt 形が合う
+        P-->>F: TodoCreate の実物
+        F->>H: todo=... で呼ぶ
+        H->>L: append
+        H-->>C: 200 + JSON
+    else 形が合わない
+        P--xF: 失敗の一覧
+        F--xC: 422 + loc ["body", "title"]
+        Note over H,L: 呼ばれない。リストも増えない
+    end
+```
+
+✅ 描画確認済み: mermaid 12.0.0 でパース通過。
+
+**失敗した側の矢印は、`create_todo()` にも `todos` にも届かない。** これを 4-6 で実際に確かめる。
+
+---
+
+### 4-2a. 🔤 入口の2行
+
+#### 🔤 `@app.post("/todos")`
+**読み方**: 「アット・アップ・ドット・ポスト、スラッシュ・トゥードゥーズ」
+**要するに**: `@app.get` の**「送ってきたものを受け取る」版**の貼り紙。中身を持ったお届け物を受け付ける窓口。
+
+#### 🔤 `class TodoCreate(BaseModel):`
+**読み方**: 「クラス・トゥードゥー・クリエイト、ベース・モデル」
+**要するに**: **申込用紙のひな形**。「タイトル欄は必須、完了欄は空なら『いいえ』」と、用紙の書き方を決めたもの。
+
+#### 🔤 `Field(min_length=1, max_length=200)`
+**読み方**: 「フィールド、ミン・レングス・イコール・いち、マックス・レングス・イコール・にひゃく」
+**要するに**: 用紙の**1つの欄への注文**。「1文字以上、200文字まで」。P1-3 の `Query()` の、用紙の欄版。
+
+---
+
+### 4-2. 🔬 仕組み解剖
+
+| 部品 | 正式名称 | 実行時に何が起きるか |
+| --- | --- | --- |
+| `@app.post("/todos")` | パスオペレーションデコレータ（POST） | `@app.get` と同じく**起動時に**経路表へ `("POST", "/todos") → create_todo` を1行書く。同じ `/todos` でも **GET とは別の行**になる |
+| `todo: TodoCreate` | リクエストボディ | **起動時**、FastAPI は引数の型が `BaseModel` の仲間だと見て「これはボディ」と判定する（図は 4-4）。**リクエストごと**に、ボディを JSON として読み、Pydantic に `TodoCreate` として検証させ、**できあがった実物**を `todo` に渡す |
+| `Field(min_length=1, max_length=200)` | フィールドの制約 | 型（`str`）に加えて、長さの条件を**設計図に書き込む**。検証は Pydantic が行う。`Annotated` の2枚目の札なので、**mypy は見ない**（P1-3 の 3-3 参照） |
+
+**いつ評価されるか**: `class TodoCreate` が読み込まれた時点（起動時）で、Pydantic が**検証の手順を組み立てて**持っておく。
+リクエストごとに走るのは、その手順を実行する部分だけ。
+
+**どの道具の責務か**: ボディを読んで引数に振り分けるのは FastAPI、**形を検証して詰めるのは Pydantic**（図 4-1b(a)）。
+
+**失敗したらどうなるか**: 全部 422。`loc` の1つ目が **`body`** になり、2つ目に**どの欄か**が入る。
+
+| 失敗 | `type` | `loc` |
+| --- | --- | --- |
+| `title` が無い | `missing` | `["body", "title"]` |
+| `title` が数値 | `string_type` | `["body", "title"]` |
+| `title` が空文字 | `string_too_short` | `["body", "title"]` |
+| JSON が壊れている | `json_invalid` | `["body", 13]`（**13文字目**で壊れた） |
+
+**既知スタックとの対応**: zod の `TodoCreate.parse(req.body)` を、**ハンドラの手前に自動で挟んだ**形。
+違いは2つ。(1) 失敗時に**自分で `res.status(422)` を書かなくてよい**。(2) zod のスキーマは TS の型と別に書くが、
+Pydantic のクラスは**型そのもの**なので、mypy が `todo.title` を `str` として扱える。
+
+---
+
+### 4-3. 🐍 Python解説
+
+#### 🐍 `class TodoCreate(BaseModel):`（クラスの定義と継承）
+
+**読み方**: 「クラス／トゥードゥー・クリエイト／かっこ ベース・モデル／コロン」
+
+**たとえ**: **申込用紙のひな形**を作っている。
+`class` が「これからひな形を作ります」、`TodoCreate` がひな形の名前。
+`(BaseModel)` は「**Pydantic が用意した基本の用紙を下敷きにします**」。
+下敷きのおかげで、「欄が埋まっているか調べる」「JSON にする」といった**用紙としての機能が最初から全部ついてくる**。
+行末の `:` から下（字下げされた範囲）が、この用紙にどんな欄があるかの一覧。
+
+**正確には**:
+- `class 名前:` = **クラス**（ひな形）を定義する合図。字下げされた範囲がクラスの中身。`def` と同じく行末の `:` が要る
+- `class 名前(親):` = `()` の中のクラスを**引き継ぐ**（これを**継承**と呼ぶ）。親が持つ機能を、子がそのまま使える
+- ひな形から作った1枚1枚を**インスタンス**（実物）と呼ぶ。`todo` 引数に入ってくるのは、Pydantic が作った `TodoCreate` の実物
+- クラス名は**単語の頭を大文字**でつなぐのが Python の慣習（`TodoCreate`）。関数名は小文字と `_`（`create_todo`）
+
+**TS なら**: `class TodoCreate extends BaseModel { ... }` が形としては近い。
+違いは2つ。**`extends` の代わりに `()`**、そして **`{}` の代わりに字下げ**。
+
+⚠️ **`(BaseModel)` を書き忘れると**、ただのクラスになる。FastAPI はボディと判定できず、起動時にエラーになる。
+
+#### 🐍 クラスの中の `title: 型` と `done: bool = False`
+
+```python
+    title: Annotated[str, Field(min_length=1, max_length=200)]
+    done: bool = False
+```
+
+**読み方**: 「タイトル コロン アノテイテッド…」「ダン コロン ブール イコール フォルス」
+
+**たとえ**: 用紙の**欄**。`title` は「タイトル欄。文字で、1〜200文字」、
+`done` は「完了欄。はい／いいえ。**書かなければ『いいえ』**」。
+
+**正確には**:
+- クラスの中に `名前: 型` と書くと、それが**欄（フィールド）**になる。**`=` が無い欄は必須**、`= 値` がある欄は省略できて、省略時はその値になる
+- これは P1-3 の「既定値つき引数」（3-3）と**同じ規則**。既定値があれば任意、無ければ必須
+- 普通の Python のクラスでは `名前: 型` は「型のメモ」にすぎないが、**`BaseModel` を継承したクラスでは、Pydantic がこのメモを読んで検証の規則にする**
+
+**TS なら**: `{ title: string; done?: boolean }` が近い。
+ただし TS の `?` は「無いかもしれない」で終わるのに対し、`= False` は「**無ければ False を入れる**」。
+受け取った後の `todo.done` は必ず `True` か `False` で、**「無い」状態は残らない**。
+
+#### 🐍 `bool` と `True` / `False`
+
+**読み方**: 「ブール」「トゥルー」「フォルス」
+
+**たとえ**: **はい／いいえ**の2択だけが入る欄。
+
+**正確には**:
+- `bool` = 真偽値（はい・いいえ）の型。入る値は `True` と `False` の**2つだけ**
+- **先頭が大文字**。`true` と書くと「そんな名前は無い」とエラーになる
+- JSON に変換されると `true` / `false`（小文字）になる。4-6 の出力で `"done":false` と出るのはこのため
+
+**TS なら**: `boolean` と `true` / `false`。**大文字小文字だけが違う**。
+
+#### 🐍 `Annotated[str, Field(...)]`（2度目）
+
+**`Annotated[型, 札]` は1枚目が本当の型、2枚目は読みたい道具だけが読む札。P1-3 の 3-3 参照。**
+ここでは2枚目を読むのが FastAPI ではなく **Pydantic** になっただけ。
+
+#### 🐍 `#`（コメント）
+
+**読み方**: 「シャープ」（「ハッシュ」とも）
+
+**正確には**: `#` から行末までは**Python が読まない**。人間向けのメモ。
+TS の `//` と同じ。**複数行用の `/* */` は無い**ので、行ごとに `#` を付ける。
+
+#### 🐍 `todos: list[TodoCreate] = []`
+
+**読み方**: 「トゥードゥーズ コロン リスト・トゥードゥー・クリエイト イコール かくかっこ」
+
+**たとえ**: **申込用紙を綴じていくファイル**。`[]` は「まだ1枚も綴じていない空のファイル」。
+
+**正確には**:
+- `list` = **順番つきで並べておく入れ物**（リスト）。`[]` が空のリスト、`[a, b]` が2つ入ったリスト
+- `list[TodoCreate]` = 「中身は `TodoCreate` だけ」という型。`dict[str, str]`（P1-2）と同じく、`[]` の中が中身の型
+- `変数名: 型 = 値` = 変数に**型を書いてから**代入する形。関数の引数と同じ書き方を、ふつうの変数にも使える
+- この行は**関数の外**に書いてあるので、ファイルが読み込まれたとき（起動時）に**1回だけ**実行される。
+  だからリクエストをまたいで**同じリストが使い回され**、前のリクエストで入れたものが次のリクエストでも見える
+
+**TS なら**: `const todos: TodoCreate[] = [];`。**型の書き方が `TodoCreate[]` ではなく `list[TodoCreate]`**。
+
+#### 🐍 `todos.append(todo)`
+
+**読み方**: 「トゥードゥーズ・ドット・アペンド」
+
+**たとえ**: ファイルの**一番後ろに1枚綴じる**。
+
+**正確には**:
+- `.` = 「その物が持っている機能を使う」印。`todos.append` は「`todos` というリストが持つ `append` という機能」
+- `append(x)` = リストの**末尾に x を1つ足す**。**リストそのものが書き換わる**（新しいリストは作らない）
+
+**TS なら**: `todos.push(todo)`。名前が `push` ではなく `append`。
+
+#### 🐍 `from app.schemas.todo import TodoCreate`（`.` 区切りの import）
+
+**読み方**: 「フロム・アップ・ドット・スキーマズ・ドット・トゥードゥー・インポート・トゥードゥー・クリエイト」
+
+**正確には**: `.` は**フォルダの区切り**。`app.schemas.todo` は `app/schemas/todo.py` を指す。
+途中のフォルダ（`app/`、`app/schemas/`）に `__init__.py` が要るのは P1-2 の 2-3a(1) のとおり。
+
+> ⏭️ **後で回収**: import が**壊れたときの読み方と直し方**は P1-8（ファイルを本格的に分ける回）。
+
+---
+
+### 4-3a. 🐍 Python の道具立て ／ 4-3b. 🧩 周辺注
+
+このステップでは該当なし。
+
+---
+
+### 4-4. 解説 — なぜこう設計するか
+
+#### 🏛 設計パターン: 入口で弾く
+
+**① 問題 — ボディを `dict` で受けて、ハンドラの中で調べると**
+
+```python
+# ❌ 問題を見せるための書き方（本編では使わない）
+@app.post("/todos")
+def create_todo(body: dict[str, object]) -> dict[str, object]:
+    title = body.get("title")
+    if title is None:
+        return {"error": "title がありません"}
+    if not isinstance(title, str):
+        return {"error": "title は文字列にしてください"}
+    return body
+```
+
+> このコードは**読めなくてよい**（書くことも無い）。`if` は「もし〜なら」、`isinstance` は「〜の種類か調べる」とだけ。
+
+```
+POST {}                              → {"error":"title がありません"}           [200]
+POST {"title":123,"done":"maybe"}    → {"error":"title は文字列にしてください"} [200]
+POST {"title":"ok","done":"maybe"}   → {"title":"ok","done":"maybe"}          [200]
+```
+
+✅ 検証済み: 上のコードを別ファイルで起動し、`curl` で取得（ruff / mypy も通過）。
+
+困りごとが**3つ同時に**出ている。
+
+1. **エラーなのに 200。** 自分で 422 を書き忘れると、クライアントは成功と区別できない
+2. **最初の1つで止まる。** 2か所間違っていても、1つ直して送り直すまで2つ目が分からない
+3. **調べ忘れが素通りする。** `done` のチェックを書かなかったので `"maybe"` がそのまま保存された。
+   しかもこの `if` は **`PUT /todos/{id}` にも同じものが要る**（P1-7）
+
+**② 解 — 形をクラスに書き、引数の型にする**
+
+4-1 の `TodoCreate` がそれ。4-6 で見るとおり、3つとも消える（422 になる／**全部の失敗が一度に返る**／書いた欄は必ず調べられる）。
+
+**③ 名前** — これには **「入口で弾く」（バリデーション境界）** という名前が付いている。
+**外から来たデータは、中に入る門の1か所で調べ、門の内側では「もう正しい」と信じて書く**、という考え方。
+
+**④ たとえ** — 会場の**受付**。入口で招待状を1回確かめれば、中の各部屋で毎回確かめなくていい。
+
+**⑤ 使わない判断** — **データベースを見ないと分からない条件**（「同じタイトルが既にあるか」「その ID が存在するか」）は、
+入口の設計図には書けない。これはハンドラの中で調べて、404 や 409 を返す（**P1-7** の `HTTPException`）。
+**形の検査は入口、中身の事情の検査は中**、と分ける。
+
+#### 🪜 なぜなぜ: なぜ型が `BaseModel` だと「ボディ」になるのか
+
+**なぜ① `todo: TodoCreate` と書いただけで、なぜボディから読まれるのか**
+→ FastAPI は**起動時に**引数を1つずつ見て、置き場所を決めている。
+
+```mermaid
+flowchart TB
+    ARG["引数1つ"]
+    Q1{"パスの {} に<br/>同じ名前がある？"}
+    Q2{"int / str / bool など<br/>1つの値の型？"}
+    Q3{"BaseModel の仲間？"}
+    PATH["path"]
+    QUERY["query"]
+    BODY["body"]
+    ARG --> Q1
+    Q1 -->|はい| PATH
+    Q1 -->|いいえ| Q2
+    Q2 -->|はい| QUERY
+    Q2 -->|いいえ| Q3
+    Q3 -->|はい| BODY
+```
+
+✅ 描画確認済み: mermaid 12.0.0 でパース通過。
+
+この3つの規則は公式に明記されている。P1-3 の `item_id`（パスに名前がある）と `q`（1つの値）も、同じ規則で振り分けられていた。
+根拠: https://fastapi.tiangolo.com/tutorial/body/#request-body-path-query-parameters
+
+**なぜ② なぜ `Body()` のような印を毎回書かせず、型で決めるのか**
+→ **欄が何個もある「まとまり」は、URL に自然に載らない**から。`?title=a&done=false` はまだしも、
+入れ子や配列を URL に詰めると読めなくなる。**まとまりを表す型なら、置き場所はボディしかありえない**ので、
+印を書かせるのは同じことを2回言わせるだけになる。よくある形は**型だけで決まり**、印（`Query()` など）は**例外を書くとき**に使う。
+
+**なぜ③ では、型で自動的に決まる方式は何を失うのか** 🤔 まず自分で考える
+
+<details><summary>答え</summary>
+
+**「どこから読まれるか」がコードに書かれていない**。規則を知らない人には見えない。
+典型的な事故が `list[str]` で、「1つの値」ではないので、`Query()` を付け忘れると**クエリではなくボディ**と判定される。
+
+```
+@app.post("/x")
+def x(tags: list[str]) -> list[str]: ...
+→ OpenAPI 上: parameters なし / requestBody あり
+```
+
+✅ 検証済み: FastAPI 0.141.1 で `app.openapi()` を読んで確認。
+根拠: https://fastapi.tiangolo.com/tutorial/query-params-str-validations/#query-parameter-list-multiple-values
+
+**手当て**（§4.2.1 ルール6）: 振り分けの**結果は OpenAPI スキーマに必ず出る**。
+`parameters` に `"in": "query"` で並ぶか、`requestBody` に入るか。**P1-6** で `/openapi.json` を読めるようになれば、
+「どこから読まれるつもりか」を**起動して1秒で確認**できる。
+コードに書かない代わりに、**生成物を見れば正確に分かる**という取り引き（P1-2 なぜなぜ③ の「一覧性」と同じ形）。
+</details>
+
+> 🧠 **FastAPI の考え方**: 外から来るデータの**形**は、クラスで1回だけ書く。
+> ハンドラの1行目に来た時点で `todo` は**必ず正しい形**をしている。だから中身の処理だけを書けばいい。
+
+---
+
+### 4-5. 🏢 実務メモ ／ ⚠️ アンチパターン ／ 🔓 教材用の簡略化
+
+> 🏢 **実務メモ**: 文字列の欄には**最大の長さを必ず付ける**。付けないと、1MB のタイトルも「正しい文字列」として通り、
+> そのまま保存や処理に回る。長さの上限は、入力チェックの基本項目として挙げられている。
+> 根拠: https://cheatsheetseries.owasp.org/cheatsheets/Input_Validation_Cheat_Sheet.html
+
+> ⚠️ **アンチパターン**: ボディを `dict` で受け取る（4-4 の ① の形）。検証が消えるだけでなく、
+> **OpenAPI スキーマにも形が出ない**。Pydantic モデルで受ければ、検証と仕様書の両方が同じ1か所から作られる。
+> 根拠: https://fastapi.tiangolo.com/tutorial/body/#results
+
+> 🔓 **教材用の簡略化**: TODO を**関数の外のリスト**に置いている。サーバを止めると消え、
+> サーバを複数の**プロセス**（同時に動く別々のプログラム）で動かすと、**それぞれが別のリストを持つ**。
+> **本番では**: データベースに置く（**P3** で MySQL に置き換える）。
+> 根拠: https://fastapi.tiangolo.com/deployment/concepts/#memory-per-process
+
+---
+
+### 4-6. 🔮 予測 → 動作確認
+
+**先に予想してから実行する。**
+
+1. `{"title": 123}` を送ると何が返るか。その後 `GET /todos` の件数は増えているか
+2. `{"title": 123, "done": "maybe"}` のように**2か所**間違えると、エラーはいくつ返るか
+3. 次の2つは 200 か 422 か。(a) `{"title":"a","done":"true"}`（`true` が**文字列**）(b) `{"title":"b","priority":5}`（**設計図に無い欄**）
+
+<details><summary>実行と結果</summary>
+
+```bash
+uv run uvicorn app.main:app --port 8000 --reload
+```
+
+**正常系**
+
+```bash
+curl -sS -X POST http://127.0.0.1:8000/todos \
+  -H 'Content-Type: application/json' -d '{"title":"牛乳を買う"}'
+```
+```
+{"title":"牛乳を買う","done":false}
+```
+
+`done` を送っていないのに `false` が入っている。`= False` の既定値。
+
+**1 の答え: 422。リストは増えない**
+
+```json
+{"detail":[{"type":"string_type","loc":["body","title"],
+"msg":"Input should be a valid string","input":123}]}
+```
+
+**`loc` の1つ目が `body`**。P1-3 の `path` / `query` と並べて3種類そろった。
+`123` を `"123"` に**直してはくれない**（数値から文字列への変換は Pydantic が許していない）。
+
+**2 の答え: 2つ。まとめて返る**
+
+```json
+{"detail":[
+ {"type":"string_type","loc":["body","title"],"msg":"Input should be a valid string","input":123},
+ {"type":"bool_parsing","loc":["body","done"],
+  "msg":"Input should be a valid boolean, unable to interpret input","input":"maybe"}]}
+```
+
+4-4 の ① の手書き版は1つ目で止まっていた。**Pydantic は全部の欄を調べてから、失敗を一覧で返す**。
+根拠: https://pydantic.dev/docs/validation/latest/concepts/models/#validating-data
+
+**3 の答え: どちらも 200**
+
+```
+(a) {"title":"a","done":true}
+(b) {"title":"b","done":false}
+```
+
+(a) は文字列の `"true"` が**本物の `true` に変換**された。`bool` の欄は `"yes"` / `"on"` / `"1"` なども受け付ける
+（`"maybe"` は受け付けない）。(b) の `priority` は**黙って捨てられた**。どちらも Pydantic の既定の振る舞い。
+根拠: https://pydantic.dev/docs/validation/latest/concepts/conversion_table/ ／
+https://pydantic.dev/docs/validation/latest/concepts/models/#extra-data
+
+**最後に、リストの中身**
+
+```bash
+curl -sS http://127.0.0.1:8000/todos
+```
+```
+[{"title":"牛乳を買う","done":false},{"title":"a","done":true},{"title":"b","done":false}]
+```
+
+**200 を返した3件だけが入っている。** 422 になったリクエストは、`create_todo()` の `append` まで**届いていない**（4-1b(b) の図のとおり）。
+
+**`/items/` を消したことの確認**
+
+```bash
+curl -sS http://127.0.0.1:8000/items/1
+```
+```
+{"detail":"Not Found"}
+```
+</details>
+
+✅ 検証済み（上の出力はすべて実行して取得）。
+
+> ⏭️ **後で回収**: 3(b) の「知らない欄を黙って捨てる」を**422 にしたい**ときは、`model_config` で設定を変える。**P1-5** で扱う。
+
+---
+
+### 4-6b. 🧾 OpenAPI スキーマの差分
+
+**まだ対象外**（差分を出し始めるのは P1-6 から。§4.14）。
+
+> ⏭️ **後で回収**: `TodoCreate` は仕様書の `components.schemas` に1項目として載り、
+> `POST /todos` の `requestBody` からは `{"$ref": "#/components/schemas/TodoCreate"}` という**矢印**で指される。
+> `min_length=1` は `"minLength": 1` として出ている。読み方は **P1-6**。
+
+---
+
+### 4-7. ✅ 想起チェック
+
+1. `def f(todo: TodoCreate)` の `todo` がボディと判定されるのは、いつか。何を見て決めているか
+2. 422 のとき `create_todo()` が呼ばれていないことを、このステップではどうやって確かめたか
+3. `done: bool = False` の `= False` を消すと、何が変わるか
+4. 手書きの `if` で検証するやり方に比べて、困りごとが3つ消えた。何と何と何か
+5. 「同じタイトルが既にある」を 422 と同じ入口で弾けないのはなぜか
+
+<details><summary>答え</summary>
+
+1. **起動時。** 引数の型が `BaseModel` の仲間かどうかを見ている（パスに名前がある → path、1つの値 → query、`BaseModel` → body）。
+2. **`GET /todos` の件数。** 422 になった送信はリストに増えていなかった。
+3. **`done` が必須になる。** 送らないと `missing` で 422。既定値の有無が「省略できるか」を決める（P1-3 と同じ規則）。
+4. **失敗なのに 200 になる**（→ 必ず 422）／**最初の1つで止まる**（→ 全部まとめて返る）／**調べ忘れが素通りする**（→ 書いた欄は必ず調べられる）。
+5. **データベースを見ないと分からない**から。入口で調べられるのは「形」だけ。中身の事情はハンドラの中で調べる（P1-7）。
+</details>
+
+---
+
+### 4-8. 初出トークンの回収確認
+
+| トークン | 扱い |
+| --- | --- |
+| `@app.post()` | 4-2a で入口の2行 / 4-2 で仕組み解剖（GET とは経路表の別の行） |
+| `BaseModel`（ボディ判定） | 4-2a / 4-2 で仕組み解剖 / 4-4 で なぜなぜ3段（代償の手当ては ⏭️ **P1-6** で回収） |
+| `Field()` | 4-2a / 4-2 で仕組み解剖 / 4-5 の実務メモ |
+| 422 の自動応答（`body` 版） | 4-2 の失敗表 / 4-6 で実挙動（**P1-3 の ⏭️「ボディの 422 は P1-4」を回収**） |
+| `class` / 継承 `(BaseModel)` | 4-3 で Python解説 |
+| クラスの中の `名前: 型` / 既定値 | 4-3 で Python解説（必須と任意の規則） |
+| `bool` / `True` / `False` | 4-3 で Python解説（先頭が大文字） |
+| `Annotated`（2度目） | 4-3 で1行復習 |
+| `#`（コメント） | 4-3 で Python解説 |
+| `list[...]` / `[]` / 関数の外の変数 | 4-3 で Python解説（起動時に1回だけ作られる） |
+| `.append()` / `.` | 4-3 で Python解説 |
+| `.` 区切りの import | 4-3 で Python解説 / ⏭️ **壊れたときの直し方は P1-8** |
+| 🏛 入口で弾く | 4-4 で 問題 → 解 → 名前 → たとえ → 使わない判断 |
+| 知らない欄を捨てる振る舞い | 4-6 の Q3 / ⏭️ **P1-5 の `model_config` で回収** |
+| `/items/` の削除 | 4-1 / 4-6 で 404 を確認（**P1-3 の 💡補足を回収**） |
+
+**未回収: 0件**（`⏭️` 宣言は4件、すべて回収先を明示）
+
+---
+
+### 4-9. 📌 進捗の更新
+
+`README.md` の進捗表 P1a を「P1-4 完了」、次の一手を `M1: P1 ステップ5` に更新した。
+
+**次のステップ**: P1-5「返す形を宣言する」。いまの `-> TodoCreate` には **ID が無い**。
+受け取る形（`TodoCreate`）と返す形（`TodoRead`）を**別のクラスに分け**、作成成功を **201** で返す。
+4-6 で見た「知らない欄を黙って捨てる」を `model_config` で変えるのもここ。

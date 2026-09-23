@@ -1,8 +1,10 @@
-from typing import Annotated
+from fastapi import FastAPI
 
-from fastapi import FastAPI, Query
+from app.schemas.todo import TodoCreate
 
 app = FastAPI()
+
+todos: list[TodoCreate] = []
 
 
 @app.get("/health")
@@ -10,9 +12,12 @@ def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
-@app.get("/items/{item_id}")
-def read_item(
-    item_id: int,
-    q: Annotated[str | None, Query(max_length=20)] = None,
-) -> dict[str, int | str | None]:
-    return {"item_id": item_id, "q": q}
+@app.post("/todos")
+def create_todo(todo: TodoCreate) -> TodoCreate:
+    todos.append(todo)
+    return todo
+
+
+@app.get("/todos")
+def list_todos() -> list[TodoCreate]:
+    return todos
