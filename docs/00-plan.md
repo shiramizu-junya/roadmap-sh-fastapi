@@ -307,7 +307,7 @@ flowchart LR
 | # | タイトル | 作るもの | 初出（FastAPI） | 重要度 |
 | --- | --- | --- | --- | --- |
 | P1-6 | **生成された仕様書を読む** | `/openapi.json` を `jq` で読み解く。`/docs` で Try it out | `GET /openapi.json`, `components.schemas` と `$ref`, `tags=` / `summary=` | 🔴 |
-| P1-7 | 残りの CRUD と 404 | `GET /todos/{id}` `PUT` `DELETE` が揃う | `HTTPException`, `status` 定数, `responses=`（スキーマへの宣言） | 🔴 |
+| P1-7 | 残りの CRUD と 404 | `GET /todos/{id}` `PUT` `DELETE` が揃う。**P1-5 の `id = len(todos) + 1` が DELETE で重なるのを予測問題で踏む** | `HTTPException`, `status` 定数, `responses=`（スキーマへの宣言） | 🔴 |
 | P1-8 | ルーター分割と依存性注入 | `app/routers/todos.py` に切り出し、共通処理を注入。**`__init__.py` と import がここで本番**。**`app.routes` で経路一覧を確認**（`prefix` の付き方を目で見る） | `APIRouter`, `include_router()`, `Depends()` | 🔴 |
 | P1-9 | Zed からブレークポイントで止める | `.zed/debug.json`。`POST /todos` を止めてボディを覗く | —（debugpy / attach） | 🔴 |
 

@@ -1988,3 +1988,561 @@ curl -sS http://127.0.0.1:8000/items/1
 **次のステップ**: P1-5「返す形を宣言する」。いまの `-> TodoCreate` には **ID が無い**。
 受け取る形（`TodoCreate`）と返す形（`TodoRead`）を**別のクラスに分け**、作成成功を **201** で返す。
 4-6 で見た「知らない欄を黙って捨てる」を `model_config` で変えるのもここ。
+
+---
+
+## P1-5: 返す形を宣言する
+
+**作るもの**: `POST /todos` が **ID 付きの `TodoRead`** を **201** で返す。知らない欄を送られたら 422 で弾く
+**重要度**: 🔴 毎日使う — 「受け取る形」と「返す形」を分けるのは、この先すべての作成・取得エンドポイントの基本形になるため
+**前ステップとの接続**: P1-4 の `-> TodoCreate` には **ID が無かった**。4-6 の Q3(b) で見た「知らない欄を黙って捨てる」もここで変える
+
+### 5-0. このステップの初出トークン
+
+| 系統 | トークン |
+| --- | --- |
+| **FastAPI** | 返す形の宣言（戻り値の型 / `response_model`）/ `status_code=201` / `model_config`（3つ = 上限） |
+| **Python** | クラスを呼んで実物を作る `TodoRead(...)` / 名前付きで渡す引数 `id=...` / `len()` / `todo.title`（欄を読む `.`）/ クラスの中の `名前 = 値`（`:` 無し） |
+| **【道具】** | —（該当なし） |
+| **周辺** | `jq` / `curl -w '%{stderr}%{http_code}\n'` |
+
+> 💡 **このステップから、コードは自分で書く。** 5-1 には**要件と骨組み（`# TODO:` の穴）**だけを置き、
+> 完成形は `<details>` に入れた。`_prompt.md` §6.1 では新しい概念の初回は完成コードを全文出すことになっているが、
+> **学習者の希望で骨組みにした**（解説は全文を前提に書いてある）。
+
+---
+
+### 5-1. コード
+
+#### 要件
+
+1. `app/schemas/todo.py` に **`TodoRead`** を足す。欄は `id`（整数）/ `title`（文字列）/ `done`（真偽値）。**3つとも必須**
+2. `TodoCreate` は**設計図に無い欄を 422 で弾く**ようにする
+3. `POST /todos` は、成功したら **201** で `TodoRead` を返す。`id` は **1 から順に**振る
+4. `todos` リストと `GET /todos` も `TodoRead` に揃える
+5. ruff / mypy が通る（コミットすれば pre-commit が確かめる）
+
+#### 骨組み: `app/schemas/todo.py`
+
+```python
+from typing import Annotated
+
+from pydantic import BaseModel, ConfigDict, Field
+
+
+class TodoCreate(BaseModel):
+    # TODO: 設計図に無い欄を 422 にする設定を1行（ConfigDict を使う）
+
+    title: Annotated[str, Field(min_length=1, max_length=200)]
+    done: bool = False
+
+
+class TodoRead(BaseModel):
+    # TODO: id / title / done の3つの欄。どれも既定値なし
+    ...
+```
+
+#### 骨組み: `app/main.py`（変わる部分だけ）
+
+```python
+from app.schemas.todo import TodoCreate, TodoRead
+
+todos: list[TodoRead] = []
+
+
+@app.post("/todos")  # TODO: 成功時のステータスを 201 にする
+def create_todo(todo: TodoCreate) -> TodoRead:
+    # TODO: id を振って TodoRead の実物を作り、リストに足して返す
+    ...
+
+
+@app.get("/todos")
+def list_todos() -> list[TodoRead]:
+    return todos
+```
+
+> `...`（ドット3つ）は「**ここはまだ空**」という印で、Python が文法として許している置き場所。穴を埋めたら消す。
+
+<details><summary>完成形（自分で書いてから開く）</summary>
+
+`app/schemas/todo.py`
+
+```python
+from typing import Annotated
+
+from pydantic import BaseModel, ConfigDict, Field
+
+
+class TodoCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    title: Annotated[str, Field(min_length=1, max_length=200)]
+    done: bool = False
+
+
+class TodoRead(BaseModel):
+    id: int
+    title: str
+    done: bool
+```
+
+`app/main.py`（全文）
+
+```python
+from fastapi import FastAPI
+
+from app.schemas.todo import TodoCreate, TodoRead
+
+app = FastAPI()
+
+todos: list[TodoRead] = []
+
+
+@app.get("/health")
+def health() -> dict[str, str]:
+    return {"status": "ok"}
+
+
+@app.post("/todos", status_code=201)
+def create_todo(todo: TodoCreate) -> TodoRead:
+    new_todo = TodoRead(id=len(todos) + 1, title=todo.title, done=todo.done)
+    todos.append(new_todo)
+    return new_todo
+
+
+@app.get("/todos")
+def list_todos() -> list[TodoRead]:
+    return todos
+```
+
+</details>
+
+✅ 検証済み: Python 3.12.13 / FastAPI 0.141.1 / Pydantic 2.13.5 / jq 1.8.2。
+完成形を別の場所にコピーして `ruff check` = `All checks passed!`、`ruff format --check` = `4 files already formatted`、
+`mypy` = `Success: no issues found in 4 source files`。実レスポンスは 5-6。
+
+> 🔓 **教材用の簡略化**: `id` を `len(todos) + 1` で振っている。**削除が無いうちしか正しくない**
+> （3件のうち1件を消すと、次に振る `id` が既存と重なる）。
+> **本番では**: データベースに振らせる（**P3** の自動採番）。
+> ⏭️ **P1-7** で `DELETE` を足すときに、この重なりを予測問題として実際に踏む。
+> 根拠: https://dev.mysql.com/doc/refman/8.0/en/example-auto-increment.html
+
+---
+
+### 5-1b. 📊 図解
+
+#### (a) 入口の門と出口の門
+
+```mermaid
+flowchart LR
+    C["curl"]
+    subgraph in["入口の門 TodoCreate"]
+        IN{"形は合う？<br/>知らない欄は無い？"}
+    end
+    H["create_todo()<br/>id を振る"]
+    subgraph out["出口の門 TodoRead"]
+        OUT{"形は合う？"}
+    end
+    E422["422<br/>loc: body<br/>送った側の間違い"]
+    E500["500<br/>loc: response<br/>サーバ側の間違い"]
+    OK["201 + TodoRead"]
+    C --> IN
+    IN -->|はい| H
+    IN -->|いいえ| E422
+    H --> OUT
+    OUT -->|はい| OK
+    OUT -->|いいえ| E500
+```
+
+✅ 描画確認済み: mermaid 12.0.0 でパース通過。
+
+**門は2つある。** P1-4 までは入口しか見ていなかった。
+入口で落ちるのは**送った人の間違い**なので 422、出口で落ちるのは**あなたのコードの間違い**なので **500**。
+同じ「形が合わない」でも、**誰の責任か**で番号が変わる（5-6 の Q3 で実際に起こす）。
+
+#### (b) 1回の作成で、誰が何をするか
+
+```mermaid
+sequenceDiagram
+    participant C as curl
+    participant F as FastAPI
+    participant P as Pydantic
+    participant H as create_todo()
+
+    C->>F: POST /todos {"title":"牛乳を買う"}
+    F->>P: TodoCreate として検証
+    P-->>F: TodoCreate の実物
+    F->>H: todo=... で呼ぶ
+    H->>H: TodoRead(id=1, ...) を作る
+    H-->>F: TodoRead の実物
+    F->>P: TodoRead として検証し JSON に直す
+    P-->>F: {"id":1,"title":"牛乳を買う","done":false}
+    F-->>C: 201 + JSON
+```
+
+✅ 描画確認済み: mermaid 12.0.0 でパース通過。
+
+**Pydantic は2回呼ばれている。** 1回目は入ってくるときの検証、2回目は出ていくときの検証と JSON への変換。
+2回目はハンドラの**後ろ**で動くので、`return` した後に FastAPI の中で起きる。
+
+---
+
+### 5-2a. 🔤 入口の2行
+
+#### 🔤 `-> TodoRead`（返す形の宣言）／ `response_model=TodoRead`
+**読み方**: 「アロー・トゥードゥー・リード」／「レスポンス・モデル・イコール・トゥードゥー・リード」
+**要するに**: **出口の門に貼る「持ち出してよいもの一覧」**。一覧に無いものは門で取り上げられる。
+
+#### 🔤 `status_code=201`
+**読み方**: 「ステータス・コード・イコール・にひゃくいち」
+**要するに**: **うまくいったときに返す番号**を、貼り紙に書いておく。201 は「新しく作りました」。
+
+#### 🔤 `model_config = ConfigDict(extra="forbid")`
+**読み方**: 「モデル・コンフィグ・イコール・コンフィグ・ディクト、エクストラ・イコール・フォービッド」
+**要するに**: 用紙のひな形全体への**注意書き**。「**書く欄の無いことを書いてきたら受け付けない**」。
+
+---
+
+### 5-2. 🔬 仕組み解剖
+
+| 部品 | 正式名称 | 実行時に何が起きるか |
+| --- | --- | --- |
+| `-> TodoRead` | 戻り値の型によるレスポンスモデル | **起動時**、FastAPI は戻り値の型を読んで**レスポンスモデル**にする。**リクエストごと**に、ハンドラが返したものを `TodoRead` として検証し、**`TodoRead` に無い欄を落としてから** JSON にする。合わなければ **500** |
+| `response_model=TodoRead` | レスポンスモデル（デコレータ側） | 上と同じことをデコレータ側に書く形。**両方あれば `response_model` が勝つ**。戻り値の型と実際に返すものが違うとき（辞書を返すなど）に使う（5-6 の Q3） |
+| `status_code=201` | レスポンスのステータスコード | 成功したときの番号を**起動時に**決めておく。**関数の引数ではなくデコレータの引数**。失敗時（422 など）には効かない |
+| `model_config = ConfigDict(extra="forbid")` | モデルの設定 | **クラスが読み込まれた時点で** Pydantic が検証手順に組み込む。知らない欄があると `extra_forbidden` で落ちる。既定は `"ignore"`（黙って捨てる。4-6 の Q3(b)） |
+
+**いつ評価されるか**: 4つとも**起動時に**読まれて検証の手順に組み込まれる。リクエストごとに走るのは、その実行だけ。
+
+**どの道具の責務か**: 出口の検証と「無い欄を落とす」は **Pydantic**、それを呼ぶ順番と 201 / 500 を決めるのは **FastAPI**、
+`extra="forbid"` は **Pydantic の設定**（FastAPI は関係しない）。
+
+**失敗したらどうなるか**
+
+| 失敗 | 番号 | どこに出るか |
+| --- | --- | --- |
+| 知らない欄を送った | **422**（`extra_forbidden`、`loc: ["body", "priority"]`） | レスポンスのボディ |
+| 返す形が `TodoRead` に合わない | **500**（中身は `Internal Server Error` という文字だけ） | **サーバのターミナル**に `ResponseValidationError` と `loc: ('response', 'id')` |
+
+**500 のとき、詳細はクライアントに返らない。** サーバ内部の事情を外に見せないため。原因は**サーバのログを読む**（P1-2 のトレースバックの読み方がここで効く）。
+
+**既知スタックとの対応**: tRPC の `.output(zodSchema)` が近い。返す値を zod で検証し、**スキーマに無いキーを落とす**（zod の `.parse()` は既定で未知のキーを取り除く）。
+違いは、FastAPI では**戻り値の型を書けば自動でそうなる**こと。Express には対応物なし（`res.json()` は渡したものを全部出す）。
+根拠: https://fastapi.tiangolo.com/tutorial/response-model/#response-model-priority
+
+---
+
+### 5-3. 🐍 Python解説
+
+#### 🐍 `TodoRead(id=..., title=..., done=...)`（クラスを呼んで実物を作る）
+
+**読み方**: 「トゥードゥー・リード、アイディー・イコール…、タイトル・イコール…、ダン・イコール…」
+
+**たとえ**: **ひな形の用紙に記入して、1枚の本物の書類にする**。
+P1-4 では Pydantic が記入してくれた（ボディから `TodoCreate` を作った）。今回は**あなたが自分で記入する**。
+
+**正確には**:
+- クラスの名前の後ろに `()` を付けると、そのクラスの**実物（インスタンス）**が1つできる。関数を呼ぶのと同じ形
+- `BaseModel` を継承したクラスでは、**このときも検証が走る**。`TodoRead(id="abc", ...)` なら、その場でエラーになる
+- **`new` は書かない。** TS の `new TodoRead(...)` の `new` にあたる語は Python に無い
+
+**TS なら**: `new TodoRead({ id: 1, title: "a", done: false })` に近い。**`new` が無い**のと、`{}` で包まず**直接並べる**のが違い。
+
+#### 🐍 `id=len(todos) + 1`（名前付きで渡す引数）
+
+**読み方**: 「アイディー・イコール・レン・トゥードゥーズ・プラス・いち」
+
+**たとえ**: 用紙に**欄の名前を指さしながら**書き込む。「ID 欄はこれ、タイトル欄はこれ」。
+
+**正確には**:
+- `名前=値` の形で渡すと、**順番ではなく名前で**どの引数かが決まる。`Field(min_length=1)` や `Query(max_length=20)` も同じ形だった
+- **`=` の左右に空白を入れない**のが慣習（`id=1`）。ふつうの代入 `x = 1` とは見た目で区別する。ruff format もそう揃える
+- `len(x)` = x の**中に入っている数**を返す。空のリストなら `0`。だから1件目は `0 + 1 = 1`
+- `len` は `from` で取り出さなくても**最初から使える**（Python に組み込まれている）
+
+**TS なら**: 引数の名前指定は**対応物なし**（TS はオブジェクトを1つ渡して `{ id, title }` と分ける）。`len(todos)` は `todos.length`。
+
+#### 🐍 `todo.title`（欄を読む `.`）
+
+**正確には**: P1-4 の `todos.append` の `.` は「機能を使う」だったが、`()` が付かなければ**中の値を読む**。
+`todo.title` は「`todo` の `title` 欄の値」。TS の `todo.title` と**まったく同じ**。
+mypy は `todo` が `TodoCreate` だと知っているので、`todo.titel` と打ち間違えると**実行前に**教えてくれる。
+
+#### 🐍 `model_config = ConfigDict(...)`（クラスの中の、`:` の無い行）
+
+**読み方**: 「モデル・コンフィグ・イコール…」
+
+**たとえ**: 用紙のひな形に**欄を足しているのではなく**、ひな形の**余白に注意書きを書いている**。
+
+**正確には**:
+- P1-4 で見たとおり、`BaseModel` の中の **`名前: 型`（`:` がある行）は欄**になる
+- **`名前 = 値`（`:` が無い行）は欄にならない。** ただの値としてクラスに置かれる
+- Pydantic は **`model_config` という名前だけ**を「設定」として特別に読む。**名前を1文字でも変えると、ただの値になって効かない**
+- `ConfigDict(extra="forbid")` は設定を入れる入れ物を作っている。`extra` に入れられるのは `"ignore"`（既定）/ `"allow"` / `"forbid"`
+
+**TS なら**: **対応物なし。** TS のクラスでは `:` の有無でこのような区別はしない。
+「決まった名前の値を、ライブラリが設定として読む」という約束ごとは、Python のライブラリでよく使われる形。
+
+#### 🐍 `...`（ドット3つ）
+
+**正確には**: 骨組みの中身を**まだ書いていない**ことを示す置き場所。Python は字下げされた範囲が空だと文法エラーにするので、
+「空です」と書く代わりに置く。**穴を埋めたら消す**。
+
+---
+
+### 5-3a. 🐍 Python の道具立て
+
+このステップでは該当なし。
+
+### 5-3b. 🧩 周辺注
+
+> 🧩 **周辺注**: `jq` は **JSON を読みやすく並べ直す道具**。`curl ... | jq` で整形され、`| jq '.detail[] | {loc, input}'` のように**一部だけ取り出す**こともできる。
+> 詳しい書き方は **P1-6**（`/openapi.json` を読む回）。**JSON でないもの**を渡すと `jq: parse error` になる（5-6 の Q3）。
+
+> 🧩 **周辺注**: `curl -w '%{stderr}%{http_code}\n'` は、**ステータス番号だけを画面の別の出口（標準エラー）に出す**指定。
+> ボディだけが `jq` に流れるので、番号と整形済み JSON を**同時に**見られる。`-i` はヘッダがボディに混ざり `jq` が読めなくなる。
+
+---
+
+### 5-4. 解説 — なぜこう設計するか
+
+#### 🪜 なぜなぜ: なぜ受け取る形と返す形を別のクラスに分けるのか
+
+**なぜ① `TodoCreate` を返すだけではだめなのか。何が足りないのか**
+→ **`id` はサーバが決めるもの**だから。受け取るときには無く、返すときには要る。
+1つのクラスで両方をやろうとすると、`id` を「あってもなくてもよい」にするしかない。
+すると**クライアントが `id` を送ってきたときに受け付けてしまう**。5-6 の Q2 で、`{"id":999,...}` が 422 になるのを確かめる。
+
+**なぜ② なぜ「返す形」まで型で決めるのか。返したいものを返せばよいのでは**
+→ **返す側の失敗は、気づかないまま外に漏れる**から。
+P3 で表の行をそのまま返すようになると、行には `hashed_password`（P4）のような**外に出してはいけない欄**が入ってくる。
+返す形を宣言しておけば、**`TodoRead` に無い欄は出口で必ず落ちる**（5-6 の Q3 で実際に確かめる）。
+「出してはいけないものを毎回消す」ではなく、「**出してよいものだけを並べる**」ほうが、書き忘れたときに安全な側に倒れる。
+根拠: https://fastapi.tiangolo.com/tutorial/response-model/#return-type-and-data-filtering
+
+**なぜ③ では、クラスを分けると何を払うのか** 🤔 まず自分で考える
+
+<details><summary>答え</summary>
+
+**同じ欄を2回書くことになる。** `title` と `done` は `TodoCreate` にも `TodoRead` にもある。
+片方の `title` だけ `max_length` を変えて、もう片方を直し忘れる、という**ズレの種**が生まれる。
+
+**手当て**（§4.2.1 ルール6）: 共通の欄を**親クラスにまとめて継承する**方法がある（`class TodoBase(BaseModel)` に `title` と `done` を置き、
+`TodoCreate(TodoBase)` / `TodoRead(TodoBase)` とする）。公式もこの形を「重複を減らす」方法として示している。
+根拠: https://fastapi.tiangolo.com/tutorial/extra-models/#reduce-duplication
+
+**ただし今はやらない。** 欄が2つのうちは、継承でまとめるより**並べて書いたほうが読める**（どの欄があるかが1か所で見える）。
+**P3-4**（表のモデルとスキーマを分ける回）で、`TodoRead` に欄が増えたときにもう一度判断する。
+「重複を消す」は無料ではなく、**読むときに親クラスまで見に行く手間**と引き換えになる。
+</details>
+
+> 🧠 **FastAPI の考え方**: 門は**入口と出口の2つ**。入口は「受け付けてよいもの」、出口は「持ち出してよいもの」を宣言する。
+> 入口で落ちれば 422（相手の間違い）、出口で落ちれば 500（自分の間違い）。
+
+---
+
+### 5-5. 🏢 実務メモ ／ ⚠️ アンチパターン
+
+> 🏢 **実務メモ**: 作成が成功したら **201**。200 でも動くが、201 なら「**新しい何かができた**」ことが番号だけで伝わる。
+> HTTP の仕様でも、POST で新しいものを作った場合は 201 を返すと定めている。
+> 根拠: https://www.rfc-editor.org/rfc/rfc9110#name-post
+
+> ⚠️ **アンチパターン**: 返す形を宣言せず、`-> dict[str, object]` で辞書をそのまま返す。
+> 辞書に入っているものが**全部**外に出る（5-6 の Q3 の `/leak`）。**出口の門が無い状態**。
+> 根拠: https://fastapi.tiangolo.com/tutorial/response-model/#fastapi-data-filtering
+
+---
+
+### 5-6. 🔮 予測 → 動作確認
+
+**先に予想してから実行する。**
+
+1. 1件作ると、ステータス番号と `id` は何になるか
+2. 4-6 の Q3(b) と同じ `{"title":"b","priority":5}` は、今回は通るか。`{"id":999,"title":"c"}` はどうか
+3. **（実験）** 下の3つのエンドポイントを `app/main.py` に**一時的に**足す。それぞれ何が返るか
+
+```python
+@app.get("/leak")
+def leak() -> dict[str, object]:
+    return {"id": 1, "title": "a", "done": False, "internal_note": "外に出したくない"}
+
+
+@app.get("/filtered", response_model=TodoRead)
+def filtered() -> dict[str, object]:
+    return {"id": 1, "title": "a", "done": False, "internal_note": "外に出したくない"}
+
+
+@app.get("/broken", response_model=TodoRead)
+def broken() -> dict[str, object]:
+    return {"title": "a", "done": False}
+```
+
+✅ 検証済み: この3つを足した状態で ruff / mypy が通る（`-> dict[str, object]` と書いているので、mypy は辞書を返しても怒らない）。
+
+<details><summary>実行と結果</summary>
+
+```bash
+uv run uvicorn app.main:app --port 8000 --reload
+```
+
+**1 の答え: 201、`id` は 1**
+
+```bash
+curl -sS -w '%{stderr}%{http_code}\n' -X POST http://127.0.0.1:8000/todos \
+  -H 'Content-Type: application/json' -d '{"title":"牛乳を買う"}' | jq
+```
+```
+201
+{
+  "id": 1,
+  "title": "牛乳を買う",
+  "done": false
+}
+```
+
+もう1件作ると `"id": 2`。`GET /todos` の結果も `TodoRead` の形になる。
+
+```bash
+curl -sS http://127.0.0.1:8000/todos | jq -c
+```
+```
+[{"id":1,"title":"牛乳を買う","done":false},{"id":2,"title":"卵","done":true}]
+```
+
+（`jq -c` は1要素1行に詰めて出す指定）
+
+**2 の答え: どちらも 422**
+
+```bash
+curl -sS -w '%{stderr}%{http_code}\n' -X POST http://127.0.0.1:8000/todos \
+  -H 'Content-Type: application/json' -d '{"title":"b","priority":5}' | jq
+```
+```
+422
+{
+  "detail": [
+    {
+      "type": "extra_forbidden",
+      "loc": [
+        "body",
+        "priority"
+      ],
+      "msg": "Extra inputs are not permitted",
+      "input": 5
+    }
+  ]
+}
+```
+
+P1-4 では黙って捨てられていたものが、**`extra_forbidden` で弾かれた**。
+`{"id":999,"title":"c"}` も同じく `"loc": ["body", "id"]` で 422。**`id` は `TodoCreate` の欄ではない**ので、
+クライアントが ID を選ぶことはできない（5-4 の なぜなぜ①）。
+
+**3 の答え**
+
+```bash
+curl -sS -w '%{stderr}%{http_code}\n' http://127.0.0.1:8000/leak | jq -c
+curl -sS -w '%{stderr}%{http_code}\n' http://127.0.0.1:8000/filtered | jq -c
+curl -sS -w '%{stderr}%{http_code}\n' http://127.0.0.1:8000/broken | jq -c
+```
+```
+200
+{"id":1,"title":"a","done":false,"internal_note":"外に出したくない"}
+200
+{"id":1,"title":"a","done":false}
+500
+jq: parse error: Invalid numeric literal at line 1, column 9
+```
+
+- **`/leak`**: 門が無いので、`internal_note` まで**全部出た**
+- **`/filtered`**: 返したものは同じ辞書なのに、`internal_note` が**消えた**。`response_model` の門で落ちた
+- **`/broken`**: **500**。そして `jq` が壊れた。ボディが JSON ではないから。`-i` を付けて生のまま見る
+
+```bash
+curl -sS -i http://127.0.0.1:8000/broken
+```
+```
+HTTP/1.1 500 Internal Server Error
+content-type: text/plain; charset=utf-8
+
+Internal Server Error
+```
+
+**クライアントには理由が返らない。** 理由は**サーバのターミナル**に出ている。**下から読む**（P1-2 の 2-3a(2)）。
+
+```
+fastapi.exceptions.ResponseValidationError: 1 validation error:
+  {'type': 'missing', 'loc': ('response', 'id'), 'msg': 'Field required', 'input': {'title': 'a', 'done': False}}
+
+  File ".../app/main.py", line 37, in broken
+    GET /broken
+```
+
+**`loc` の1つ目が `response`**。path / query / body に続く**4つ目**で、「**返す側**の `id` が無い」と言っている。
+最後の `File` の行が**あなたのファイルの `broken` 関数**（の貼り紙の行）を指している。
+
+**確かめ終わったら、3つのエンドポイントは消す。**
+</details>
+
+✅ 検証済み（上の出力はすべて実行して取得。行番号 `line 37` は完成形の末尾に3つを足した場合で、`@app.get("/broken", ...)` の行を指す。足した位置によって変わる）。
+
+---
+
+### 5-6b. 🧾 OpenAPI スキーマの差分
+
+**まだ対象外**（差分を出し始めるのは次の P1-6 から。§4.14）。
+
+> ⏭️ **後で回収**: `POST /todos` の返り値の一覧は、今 `["201", "422"]` になっている（200 が消えて 201 に置き換わった）。
+> `201` の中身は `{"$ref": "#/components/schemas/TodoRead"}`。**入口の形と出口の形の両方がそろった**ので、
+> P1-6 で `/openapi.json` を `jq` で読む準備ができた。
+
+---
+
+### 5-7. ✅ 想起チェック
+
+1. `-> TodoRead` と `response_model=TodoRead` を両方書いたら、FastAPI はどちらを使うか。`response_model` が要るのはどんなときか
+2. 入口で形が合わないと 422、出口で合わないと 500。番号が違うのはなぜか
+3. `model_config = ConfigDict(extra="forbid")` を `config = ConfigDict(extra="forbid")` と書いたら、どうなるか
+4. `status_code=201` は、なぜ関数の引数ではなくデコレータに書くのか
+5. 500 のとき、原因はどこで読むか
+
+<details><summary>答え</summary>
+
+1. **`response_model` が勝つ。** 実際に返すもの（辞書など）と、外に見せたい形が違うときに使う。
+   戻り値の型は mypy のため、`response_model` は FastAPI のため、と役割を分けられる。
+2. **誰の間違いかが違うから。** 入口は送った人の間違い（4xx）、出口はサーバのコードの間違い（5xx）。
+3. **ただの値になり、設定として効かない。** Pydantic が設定として読むのは `model_config` という名前だけ。知らない欄はまた黙って捨てられる。
+4. **ステータス番号はリクエストの中身ではなく、エンドポイントの性質だから。** 引数はリクエストから受け取るもの（path / query / body）の置き場所で、
+   デコレータは「この窓口はこういう窓口」という宣言の置き場所。
+5. **サーバのターミナル。** クライアントには `Internal Server Error` しか返らない。トレースバックを下から読み、`loc` が `response` で始まるかを見る。
+</details>
+
+---
+
+### 5-8. 初出トークンの回収確認
+
+| トークン | 扱い |
+| --- | --- |
+| 返す形の宣言（`-> TodoRead` / `response_model`） | 5-2a / 5-2 で仕組み解剖（優先順位）/ 5-4 なぜなぜ② / 5-6 の Q3 で実挙動（**P1-2 の ⏭️「実行時の効果は P1-5」を回収**） |
+| `status_code=201` | 5-2a / 5-2 で仕組み解剖 / 5-5 の実務メモ / 5-6 の Q1 |
+| `model_config` | 5-2a / 5-2 / 5-3 / 5-6 の Q2（**P1-4 の ⏭️「知らない欄を捨てる」を回収**） |
+| クラスを呼んで実物を作る | 5-3 で Python解説（`new` が無い） |
+| 名前付きの引数 / `len()` | 5-3 で Python解説 |
+| `todo.title`（欄を読む `.`） | 5-3 で Python解説 |
+| クラスの中の `名前 = 値` | 5-3 で Python解説（`:` の有無で欄か設定かが変わる） |
+| `...` | 5-3 で Python解説 |
+| `jq` / `curl -w '%{stderr}...'` | 5-3b で周辺注 / ⏭️ **`jq` の書き方は P1-6** |
+| `dict[str, int \| str \| None]` の置き換え | 5-1 で `TodoRead` を戻り値にした（**P1-3 の ⏭️ を回収**） |
+| `id` の重なり（🔓） | ⏭️ **P1-7 で DELETE を足すときに踏む** / 本番の手当ては **P3** |
+
+**未回収: 0件**（`⏭️` 宣言は3件、すべて回収先を明示）
+
+---
+
+### 5-9. 📌 進捗の更新
+
+`README.md` の進捗表 P1a を「**P1-5 完了（P1a 完了）**」、次の一手を `M2: P1a`（フェーズ末パック）に更新した。
+
+**次のステップ**: **P1a のフェーズ末パック**（`M2: P1a`）。`app/main.py` と `app/schemas/todo.py` を**白紙から再現**し（翌日にやるのが推奨）、
+宿題 Lv1〜Lv3 を解く。その後 P1b に入り、**P1-6「生成された仕様書を読む」**で、ここまで宣言してきた形が
+`/openapi.json` にどう現れているかを `jq` で読む。

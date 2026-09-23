@@ -28,6 +28,7 @@ FastAPI / Pydantic / SQLAlchemy / Alembic / pytest の API を、**1項目1行**
 | --- | --- | --- | --- |
 | `class X(BaseModel):` | ベース・モデル | 申込用紙のひな形。引数の型にするとボディになる | **P1-4 / 4-2a** |
 | `Field(min_length=1, max_length=200)` | フィールド | 用紙の1つの欄への注文 | **P1-4 / 4-2a** |
+| `model_config = ConfigDict(extra="forbid")` | モデル・コンフィグ | ひな形全体への注意書き。知らない欄を受け付けない | **P1-5 / 5-2a** |
 
 ## SQLAlchemy — 「表の形」を書き、SQL を組み立てる道具
 
@@ -53,6 +54,9 @@ FastAPI / Pydantic / SQLAlchemy / Alembic / pytest の API を、**1項目1行**
 | `Query(max_length=20)` | クエリ | `?` の後ろから来る値への注文票 | **P1-3 / 3-2a** |
 | 422 の `loc` | ロック | どこで落ちたか。`path` / `query` / `body` の3種類 | **P1-3 / 3-2** |
 | `@app.post("/path")` | アット・アップ・ドット・ポスト | 送ってきたものを受け取る窓口の貼り紙 | **P1-4 / 4-2a** |
+| `-> Model` / `response_model=` | レスポンス・モデル | 出口の門の「持ち出してよいもの一覧」。両方あれば `response_model` が勝つ | **P1-5 / 5-2a** |
+| `status_code=201` | ステータス・コード | うまくいったときの番号。デコレータに書く | **P1-5 / 5-2a** |
+| 500 の `loc: response` | — | 返す側の形が合わない。**サーバのログ**に出る | **P1-5 / 5-2** |
 
 ## pytest
 
