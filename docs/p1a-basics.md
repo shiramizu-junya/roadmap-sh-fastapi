@@ -1258,7 +1258,7 @@ OpenAPI スキーマに `"type": "integer"` として現れる。**宣言だか�
 
 | 失うもの | 具体的に | 手当て |
 | --- | --- | --- |
-| **型で表せない条件が書けない** | 「`start` は `end` より前」のような**2つの値をまたぐ**条件は、1つの引数の型では表せない | **P1-4** の `Field()` と、モデル単位の検証で一部を回収 |
+| **型で表せない条件が書けない** | 「`start` は `end` より前」のような**2つの値をまたぐ**条件は、1つの引数の型では表せない | **P1-4** の `Field()` で「1つの値の範囲」を、**P1-10** の `model_validator` で「2つの値をまたぐ条件」を回収（v11 で回収先を修正） |
 | **エラーメッセージを自由にできない** | `"Input should be a valid integer"` は Pydantic の文面。日本語にしたい、独自コードを付けたい、が直接はできない | **P5-3** の例外ハンドラ一元化で、422 の形ごと作り替える |
 | **宣言できる範囲に設計が縛られる** | 「この条件のときだけ別の形を受ける」が書きにくい | **手当てしない。** 宣言主義を選んだ以上の当然の帰結で、避けるなら FastAPI を使う意味が薄れる |
 
@@ -2546,3 +2546,355 @@ fastapi.exceptions.ResponseValidationError: 1 validation error:
 **次のステップ**: **P1a のフェーズ末パック**（`M2: P1a`）。`app/main.py` と `app/schemas/todo.py` を**白紙から再現**し（翌日にやるのが推奨）、
 宿題 Lv1〜Lv3 を解く。その後 P1b に入り、**P1-6「生成された仕様書を読む」**で、ここまで宣言してきた形が
 `/openapi.json` にどう現れているかを `jq` で読む。
+
+---
+
+## M2: P1a フェーズ末パック
+
+P1-1〜P1-5 で書いたものを、**見ないで書けるか**、**少し変えても書けるか**を確かめる。
+やることは2つ。**ブランクページ再現**と**宿題 Lv1〜Lv3**。
+
+### 📊 P1a の地図: どの失敗が、どこで起きるか
+
+再現に入る前に、P1a で作った「門」を1枚にまとめる。**書けなかった行が、この図のどの門にあたるか**を後で照らし合わせる。
+
+```mermaid
+flowchart LR
+    REQ["リクエスト"]
+    ROUTE{"経路表に<br/>パスとメソッドはある？"}
+    IN{"入口の門<br/>path / query / body"}
+    H["ハンドラ"]
+    OUT{"出口の門<br/>返す形"}
+    E404["404 / 405"]
+    E422["422"]
+    E500["500"]
+    OK["200 / 201"]
+    REQ --> ROUTE
+    ROUTE -->|ない| E404
+    ROUTE -->|ある| IN
+    IN -->|合わない| E422
+    IN -->|合う| H
+    H --> OUT
+    OUT -->|合わない| E500
+    OUT -->|合う| OK
+```
+
+✅ 描画確認済み: mermaid 12.0.0 でパース通過。
+
+| 門 | 何で決まるか | 学んだ回 |
+| --- | --- | --- |
+| 経路表 | `@app.get` / `@app.post` と、書いた**順番** | P1-2 / P1-3 |
+| 入口の門 | 引数の型（`int` / `Query()` / `BaseModel` / `Field()` / `model_config`） | P1-3 / P1-4 / P1-5 |
+| 出口の門 | 戻り値の型 / `response_model` / `status_code` | P1-5 |
+
+**番号を見れば、どの門で止まったかが分かる。** 404・405 なら経路表、422 なら入口（`loc` の1つ目で path / query / body を見分ける）、500 なら出口かハンドラの中（**サーバのターミナルを読む**）。
+
+---
+
+### ✍️ ブランクページ再現
+
+> ✍️ **ブランクページ**: `app/main.py` と `app/schemas/todo.py` を閉じて、**白紙から再現**せよ。
+> 思い出せなかった行に印を付け、**その行の仕組み解剖だけ**読み返す。
+>
+> **翌日にやることを強く勧める。** 書いた直後は短期記憶で書けてしまい、「思い出す」練習にならない。
+
+#### 手順
+
+1. 今の2ファイルを退避する
+   ```bash
+   mkdir -p /tmp/p1a-backup
+   cp app/main.py app/schemas/todo.py /tmp/p1a-backup/
+   ```
+2. 2ファイルを**空にして**、何も見ずに書く（`app/__init__.py` と `app/schemas/__init__.py` は残す）
+3. 判定する（下の「判定基準」）
+4. 元と比べる
+   ```bash
+   diff /tmp/p1a-backup/main.py app/main.py
+   diff /tmp/p1a-backup/todo.py app/schemas/todo.py
+   ```
+   **違っていても、判定基準を満たしていれば正解。** 並び順や変数名が違うのは問題ない。
+
+#### 判定基準
+
+```bash
+uv run ruff check app/ && uv run ruff format --check app/ && uv run mypy app/
+```
+3つとも通ること。そのうえでサーバを起動して、次の結果になること。
+
+| # | コマンド | 期待する結果 |
+| --- | --- | --- |
+| 1 | `curl -sS -w '%{stderr}%{http_code}\n' http://127.0.0.1:8000/health \| jq -c` | `200` / `{"status":"ok"}` |
+| 2 | `curl -sS -w '%{stderr}%{http_code}\n' -X POST http://127.0.0.1:8000/todos -H 'Content-Type: application/json' -d '{"title":"牛乳を買う"}' \| jq -c` | `201` / `{"id":1,"title":"牛乳を買う","done":false}` |
+| 3 | 同じ POST で `-d '{"title":""}'` | `422` / `string_too_short`、`loc` は `["body","title"]` |
+| 4 | 同じ POST で `-d '{"title":"a","priority":5}'` | `422` / `extra_forbidden`、`loc` は `["body","priority"]` |
+| 5 | `curl -sS http://127.0.0.1:8000/todos \| jq -c` | `[{"id":1,"title":"牛乳を買う","done":false}]`（**3 と 4 は増えていない**） |
+
+✅ 検証済み: 現在の `app/`（P1-5 完了時点）で5つとも上の結果になることを確認。
+
+#### 思い出せなかったときの読み返し先
+
+| 書けなかったもの | 読み返す場所 |
+| --- | --- |
+| `from ... import ...` の並び / `.` 区切りの import | P1-2 の 2-3 / P1-4 の 4-3 |
+| `@app.post("/todos", status_code=201)` | P1-5 の 5-2 |
+| `Annotated[str, Field(...)]` | P1-3 の 3-3 / P1-4 の 4-2 |
+| `model_config = ConfigDict(extra="forbid")` | P1-5 の 5-3（**`:` が無い行**） |
+| `TodoRead(id=..., ...)` | P1-5 の 5-3（**`new` が無い**） |
+| `-> TodoRead` を書く理由 | P1-5 の 5-4 なぜなぜ② |
+
+---
+
+### 📝 宿題
+
+**宿題は `app/` に直接書いてよい**（終わったら `git stash` か `git checkout -- app/` で戻せる）。Lv2 と Lv3 は続けてやると、答えがそのまま組み合わさる。
+
+---
+
+#### Lv1-1 基礎確認: コードを読んで答える（書かない）
+
+次のコードがあるとする。
+
+```python
+from typing import Annotated
+
+from fastapi import FastAPI
+from pydantic import BaseModel, ConfigDict, Field
+
+app = FastAPI()
+
+
+class ItemCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: Annotated[str, Field(max_length=5)]
+    count: int = 1
+
+
+@app.post("/items", status_code=201)
+def create_item(item: ItemCreate) -> ItemCreate:
+    return item
+```
+
+✅ 検証済み: ruff / mypy が通り、下の答えはすべてこのコードを起動して取得。
+
+**課題**: 次の5つを `POST /items` に送ったとき、**ステータス番号**と、422 なら **`type` と `loc`** を答えよ。
+
+1. `{"name":"pen"}`
+2. `{"name":"pencil"}`
+3. `{"name":"pen","count":"2"}`
+4. `{"count":2}`
+5. `{"name":"pencil","color":"red"}`（エラーは**いくつ**返るか）
+
+**ヒント**: `count` に既定値があるか。`"2"` は文字列だが、`int` の欄に入れられるか（P1-4 の 4-6 で `"true"` が `bool` になった話）。
+
+**判定基準**: 下の解答と、番号・`type`・`loc` がすべて一致する。**自分で起動して確かめてもよい**（上のコードを `app/lv1.py` に置き、`uv run uvicorn app.lv1:app --port 8001`）。
+
+<details><summary>解答例</summary>
+
+1. **201** / `{"name":"pen","count":1}`。`count` は省略したので既定値の 1
+2. **422** / `string_too_long`、`["body","name"]`。`pencil` は6文字
+3. **201** / `{"name":"pen","count":2}`。**数字だけの文字列は整数に変換される**（`"abc"` なら 422）
+4. **422** / `missing`、`["body","name"]`。`name` には既定値が無いので必須
+5. **422、エラーは2つ**。`string_too_long`（`["body","name"]`）と `extra_forbidden`（`["body","color"]`）。**Pydantic は全部の欄を調べてから一覧で返す**（P1-4 の 4-6 Q2）
+
+**1 と 3 で、`create_item()` は呼ばれている。2・4・5 では呼ばれていない。**
+</details>
+
+---
+
+#### Lv1-2 基礎確認: `done` を必須にする
+
+**課題**: `TodoCreate` の `done` を**必須**にする（送らなければ 422）。
+
+**ヒント**: 「必須か任意か」を決めているのは何だったか（P1-4 の 4-3）。変えるのは**1行の一部**だけ。
+
+**判定基準**
+
+```bash
+curl -sS -w '%{stderr}%{http_code}\n' -X POST http://127.0.0.1:8000/todos \
+  -H 'Content-Type: application/json' -d '{"title":"a"}' | jq -c
+```
+→ `422` / `"type":"missing","loc":["body","done"]`。`-d '{"title":"a","done":false}'` なら `201`。
+
+<details><summary>解答例</summary>
+
+```python
+    done: bool
+```
+
+**`= False` を消すだけ。** 既定値の有無が、そのまま「省略できるか」になる。
+**終わったら元に戻す**（Lv2 以降は `done: bool = False` を前提にする）。
+
+✅ 検証済み。
+</details>
+
+---
+
+#### Lv2 応用: 優先度 `priority` を足す
+
+**課題**
+
+- TODO に**優先度** `priority` を足す。**1〜5 の整数**、送らなければ **3**
+- 範囲外（0 や 6）は 422
+- 作成時のレスポンスと `GET /todos` に `priority` が**出る**こと
+
+**ヒント**
+
+- 数の範囲は `Field()` に書ける。`ge=1` は「1 **以上**」（greater than or equal）、`le=5` は「5 **以下**」（less than or equal）
+- **直す場所は3か所ある。** 受け取る形、返す形、そしてハンドラの中で `TodoRead` を作っている行。
+  どれか1つを忘れると何が起きるかを、先に予想しておく
+
+**判定基準**
+
+| 送るもの | 期待する結果 |
+| --- | --- |
+| `{"title":"a"}` | `201` / `{"id":1,"title":"a","done":false,"priority":3}` |
+| `{"title":"b","priority":5}` | `201` / `"priority":5` |
+| `{"title":"c","priority":"4"}` | `201` / `"priority":4`（文字列でも数字なら変換される） |
+| `{"title":"d","priority":0}` | `422` / `greater_than_equal`、`["body","priority"]` |
+| `{"title":"e","priority":6}` | `422` / `less_than_equal`、`["body","priority"]` |
+| `{"title":"f","priority":2.5}` | `422` / `int_from_float`（小数は整数にしない） |
+
+加えて `uv run mypy app/` が通ること。
+
+<details><summary>解答例</summary>
+
+`app/schemas/todo.py`
+
+```python
+class TodoCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    title: Annotated[str, Field(min_length=1, max_length=200)]
+    done: bool = False
+    priority: Annotated[int, Field(ge=1, le=5)] = 3
+
+
+class TodoRead(BaseModel):
+    id: int
+    title: str
+    done: bool
+    priority: int
+```
+
+`app/main.py`（`create_todo` だけ）
+
+```python
+@app.post("/todos", status_code=201)
+def create_todo(todo: TodoCreate) -> TodoRead:
+    new_todo = TodoRead(
+        id=len(todos) + 1,
+        title=todo.title,
+        done=todo.done,
+        priority=todo.priority,
+    )
+    todos.append(new_todo)
+    return new_todo
+```
+
+1行に収まらなくなったので、**引数を複数行に分けた**（P1-3 の 3-3）。ruff format に任せてもこの形になる。
+
+✅ 検証済み: ruff / mypy が通り、判定基準の6つはすべて上の結果になる。
+
+**3か所のうち1つを忘れると、こうなる**
+
+| 忘れた場所 | 何が起きるか |
+| --- | --- |
+| `TodoRead` に `priority: int` を足し忘れた | ハンドラで `priority=` を渡している行を **mypy が止める**（`Unexpected keyword argument`）。渡すのもやめると mypy は通るが、**`priority` はレスポンスに出てこない**。受け取ったのに返す形に欄が無いので、**エラーにならずに消える**。返す形を決めているのは `TodoRead` だけ（P1-5 の 5-4 なぜなぜ②） |
+| `TodoRead(...)` に `priority=` を渡し忘れた | **mypy が止める**: `Missing named argument "priority" for "TodoRead"`。mypy を通さずに動かすと **500**。サーバのターミナルに `ValidationError: 1 validation error for TodoRead / priority Field required` |
+| `TodoCreate` に足し忘れた | `{"title":"b","priority":5}` が **`extra_forbidden` で 422** になる |
+
+**2つ目は、pre-commit が入っていればコミットの時点で止まる。** P1-1 で品質ゲートを先に立てたのは、こういう「動かすまで分からない」ミスを手前で止めるため。
+
+✅ 検証済み（1つ目と2つ目は mypy の出力を、2つ目はさらに 500 とサーバのログを実際に出して確認）。
+</details>
+
+---
+
+#### Lv3 発展: 一覧を少しずつ返す（ページ分け）
+
+**課題**: `GET /todos` に `offset` と `limit` のクエリを足し、**一部だけ**返せるようにする。
+
+- `offset` = 先頭から**何件飛ばすか**。0 以上、既定 0
+- `limit` = **何件返すか**。1〜100、既定 10
+- 範囲外は 422
+
+**なぜ実務で要るか**: 一覧を全件返すと、件数が増えたときにレスポンスが際限なく大きくなる。
+**上限を決めて少しずつ返す**のが一覧エンドポイントの基本形で、公式チュートリアルのクエリの章もこの形（`skip` / `limit`）を最初の例にしている。
+根拠: https://fastapi.tiangolo.com/tutorial/query-params/
+
+**ヒント**
+
+- クエリの受け取り方は P1-3 の `q` と同じ形。`Query()` にも `ge=` / `le=` が書ける
+- リストの**一部を切り出す**書き方は、Python では `リスト[始め:終わり]`。**始めは含み、終わりは含まない**。
+  `[10, 20, 30, 40][1:3]` は `[20, 30]`。範囲がリストの外にはみ出しても**エラーにならず**、あるぶんだけ（無ければ `[]`）返る
+
+**判定基準**（Lv2 の判定基準で3件作った後の状態で）
+
+| クエリ | 期待する結果 |
+| --- | --- |
+| （なし） | `200` / 3件（id 1, 2, 3） |
+| `?limit=2` | `200` / id 1, 2 |
+| `?offset=2&limit=2` | `200` / id 3 だけ（**はみ出しても 1件返る**） |
+| `?offset=10` | `200` / `[]` |
+| `?limit=0` | `422` / `greater_than_equal`、`["query","limit"]` |
+| `?limit=101` | `422` / `less_than_equal`、`["query","limit"]` |
+| `?offset=-1` | `422` / `greater_than_equal`、`["query","offset"]` |
+
+```bash
+curl -sS -w '%{stderr}%{http_code}\n' "http://127.0.0.1:8000/todos?offset=2&limit=2" | jq -c
+```
+
+（URL に `&` が入るので、**ダブルクォートで囲む**。囲まないとシェルが `&` を「裏で実行」と読んでしまう）
+
+<details><summary>解答例</summary>
+
+`app/main.py`
+
+```python
+from typing import Annotated
+
+from fastapi import FastAPI, Query
+
+from app.schemas.todo import TodoCreate, TodoRead
+
+# （途中は同じ）
+
+
+@app.get("/todos")
+def list_todos(
+    offset: Annotated[int, Query(ge=0)] = 0,
+    limit: Annotated[int, Query(ge=1, le=100)] = 10,
+) -> list[TodoRead]:
+    return todos[offset : offset + limit]
+```
+
+✅ 検証済み: ruff / mypy が通り、判定基準の7つはすべて上の結果になる。
+
+#### 🐍 `todos[offset : offset + limit]`（スライス）
+
+**読み方**: 「トゥードゥーズ、かくかっこ、オフセット・コロン・オフセット・プラス・リミット」
+
+**たとえ**: ファイルに綴じた用紙の、**「何枚目から何枚目の手前まで」をコピーして渡す**。元のファイルは減らない。
+
+**正確には**:
+- `リスト[a:b]` は、**a 番目から b 番目の手前まで**を取り出した**新しいリスト**を作る。**番号は 0 から数える**
+- 元のリストは**変わらない**（`append` とは違う）
+- 範囲がはみ出しても**エラーにならない**。だから `?offset=10` は 422 ではなく `[]` になる
+- `:` の前後の空白は ruff format が付けたもの。**`:` の左右が式のときは空白を入れる**のが Python の書式の決まり
+
+**TS なら**: `todos.slice(offset, offset + limit)`。**始めを含み、終わりを含まない**のも、**はみ出してもエラーにならない**のも同じ。
+
+**`limit` に上限（`le=100`）を付けるのが要点。** 上限が無いと `?limit=1000000` で結局全件返せてしまい、ページ分けにした意味が無くなる。
+</details>
+
+---
+
+### 📌 進捗の更新
+
+`README.md` の進捗表 P1a を「**完了（M2 まで）**」、P1b を「**着手**」、次の一手を `M1: P1 ステップ6` に更新した。
+
+**次のステップ**: **P1b に入る。P1-6「生成された仕様書を読む」**（教材は `docs/p1b-openapi.md`）。
+ここまで**宣言してきたもの**（パス・クエリ・ボディ・`Field()` の制約・返す形・201）が、`/openapi.json` のどこにどう現れているかを `jq` で読む。
+**OpenAPI / OpenAPI スキーマ / Swagger UI / ReDoc** の4つを最初に区別し、`$ref` の読み方をやる。
+> 宿題の変更（`priority` やページ分け）は、**P1-6 に入る前に `app/` から戻しておく**と教材の出力と揃う。残したまま進めてもよいが、`jq` の結果に `priority` や `offset` が増える。
