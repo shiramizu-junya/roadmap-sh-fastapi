@@ -23,16 +23,28 @@
 > **深さと見せ方を増やし、範囲は広げない。** 出ていない文法を親切心で足すと FastAPI の話が埋もれるため、
 > 範囲の上限は据え置いた。なぜなぜは **① 何が起きているか → ② なぜその仕組みを選んだか → ③ その選択の代償** の順で固定する。
 
+> ### 📣 v11 の追加（学習者との振り返りで決定）
+>
+> 「この教材で FastAPI を概ね理解できるか」を点検し、**実務でよく出会うのに範囲外だったもの**を計画に戻した。
+>
+> | 追加したもの | 置き場所 | 理由 |
+> | --- | --- | --- |
+> | Pydantic のカスタムバリデータ（`field_validator` / `model_validator`） | **P1-10**（P1b の最後） | 2つの欄をまたぐ条件は実務でほぼ毎回書く。**P1-3 のなぜなぜ③で回収を約束したまま未回収だった** |
+> | `async def` / 非同期 DB / `lifespan` / `BackgroundTasks` / 非同期テスト | **P7**（新フェーズ・4ステップ） | 公式ドキュメントも世の中のコードも `async def` が多い。同期だけでは**他人のコードは読めても書けない** |
+>
+> **P1〜P6 は同期のまま**（§4.7 の方針は変えない）。同期で仕組みを理解しきってから、P7 で**同じアプリを非同期に書き換える**。
+> 書き換える前後を比べられるので、「何が変わり、何が変わらないか」が一番はっきり見える。
+
 ---
 
 ## 1. 到達点は、どのフェーズで満たされるか
 
-`_prompt.md` §2 の 10 条件を、達成フェーズと「達成したと言える根拠」に対応づける。
+`_prompt.md` §2 の 11 条件を、達成フェーズと「達成したと言える根拠」に対応づける。
 
 | # | 達成条件 | 満たすフェーズ | 達成の根拠（何を見て判定するか） |
 | --- | --- | --- | --- |
 | 1 | CRUD 4種が curl で動く | **P1**（メモリ上）→ **P3**（DB 上で再成立） | 4本の `curl` が 200 / 201 / 204 を返す |
-| 2 | 不正入力で 422 が返る | **P1-4** | 型違反の JSON を POST → 422 と `loc` / `type` / `msg` を含むボディ |
+| 2 | 不正入力で 422 が返る | **P1-4**（型）→ **P1-10**（欄をまたぐ条件） | 型違反の JSON を POST → 422 と `loc` / `type` / `msg` を含むボディ／開始日 > 期日で 422 |
 | 3 | ORM で MySQL に永続化、Alembic でスキーマ変更、**リレーションを辿れて N+1 に気づける** | **P2**（接続）→ **P3**（ORM と永続化）→ **P4-5**（リレーション / N+1） | `docker compose ps` が healthy／`alembic upgrade head` 後の `SHOW COLUMNS`／再起動後もデータが残る／ログ上の SELECT 回数 |
 | 4 | 未認証で 401、他人のリソースに 403 | **P4-3**（401）/ **P4-4**（403） | トークン無しで 401、他ユーザーの todo に 403 |
 | 5 | CORS が通り、全リクエストがログに残る | **P5-1** / **P5-2** | プリフライトの `OPTIONS` に `Access-Control-Allow-Origin`／標準出力に1リクエスト1行 |
@@ -41,6 +53,7 @@
 | 8 | Zed からブレークポイントを張って止められる | **P1-9**（アプリ）→ **P6-4**（テスト） | §2.5 の判定基準 **5 まで**（変数ペインでリクエストボディが見える） |
 | 9 | roadmap.sh のプロジェクト3件を自力で完成 | **PJ1**（P4 末）/ **PJ2**（P6 末）/ **PJ3**（総仕上げ） | 各 MP 回の「判定基準」をコマンド出力で自己判定 |
 | 10 | **OpenAPI スキーマを読め、Swagger UI から認証付きで実行できる** | **P1-6**（読み方）→ 全ステップ（差分）→ **P4-3**（Authorize） | `jq` で `paths` / `components.schemas` / `$ref` を説明できる／`/docs` の Authorize でトークンを入れて 200 |
+| 11 | **同じ API を非同期に書き換え、同期 I/O の混入で全体が止まる事故を説明できる** | **P7** | `async def` の中の `time.sleep` で**他のリクエストまで待たされる**のを計測で見せる／非同期版でも pytest が全件 green |
 
 ### 📊 完成時、リクエストはどの層を通るか
 
@@ -175,7 +188,7 @@ brew install jq
 
 ---
 
-## 3. 完成時のディレクトリ構成（P6 終了時点）
+## 3. 完成時のディレクトリ構成（P6 終了時点。P7 で中身が非同期に置き換わる）
 
 ```
 roadmap-sh-fastapi/
@@ -198,7 +211,7 @@ roadmap-sh-fastapi/
 │   ├── __init__.py                  P1-2
 │   ├── main.py                      P1-2（P5 でミドルウェア / 例外ハンドラを登録）
 │   ├── config.py                    P2-2（pydantic-settings）
-│   ├── database.py                  P3-1（Engine / sessionmaker）
+│   ├── database.py                  P3-1（Engine / sessionmaker）→ P7-2（非同期版に置き換え）
 │   ├── dependencies.py              P1-8（DI）→ P3-1（get_db）→ P4-3（get_current_user）
 │   ├── security.py                  P4-1（ハッシュ）→ P4-2（JWT）
 │   ├── middleware.py                P5-2（リクエストログ）
@@ -220,13 +233,15 @@ roadmap-sh-fastapi/
 │   ├── conftest.py                  P6-1 → P6-2（DB 分離）→ P6-3（トークン fixture）
 │   ├── test_health.py               P6-1
 │   ├── test_todos.py                P6-2
-│   └── test_auth.py                 P6-3
+│   ├── test_auth.py                 P6-3
+│   └── （P7-4 で非同期のテストに書き換える）
 ├── docs/
 │   ├── _prompt.md                   生成プロンプト
 │   ├── 00-plan.md                   このファイル
 │   ├── p1a-basics.md                M1 / M2 の出力（P1-1〜P1-5）
-│   ├── p1b-openapi.md               （P1-6〜P1-9）
+│   ├── p1b-openapi.md               （P1-6〜P1-10）
 │   ├── p2-env.md 〜 p6-tests.md
+│   ├── p7-async.md                  （P7。v11 で追加）
 │   ├── 90-python-index.md           Python 文法の逆引き索引（M1 のたびに追記）
 │   ├── 91-library-index.md          ライブラリ記法の逆引き索引（§4.2.2）
 │   ├── 99-uncovered.md              M3 の出力
@@ -255,6 +270,8 @@ erDiagram
         int id PK
         string title
         bool is_done
+        date start_date "P1-10"
+        date due_date "P1-10"
         int user_id FK
         datetime created_at
     }
@@ -282,7 +299,8 @@ flowchart LR
     P5 --> P6["P6<br/>テスト"]
     P4 -.-> PJ1["PJ1<br/>Expense Tracker"]
     P6 -.-> PJ2["PJ2<br/>URL Shortener"]
-    P6 --> PJ3["総仕上げ<br/>PJ3 Movie Reservation"]
+    P6 --> P7["P7<br/>非同期に<br/>書き換える"]
+    P7 --> PJ3["総仕上げ<br/>PJ3 Movie Reservation"]
 ```
 
 ✅ 描画確認済み: mermaid 12.0.0 でパース通過。
@@ -290,7 +308,7 @@ flowchart LR
 実線が「これが無いと次に進めない」、点線が「ここまでの力で作れるプロジェクト」。
 **P1〜P3 に点線が無いのは、永続化と認証が揃うまで roadmap.sh のどの課題も要件を満たせないから。**
 
-### P1 — 開発ツール → FastAPI 基礎 → 仕様書の読み方 → デバッガ（9ステップ / **P1a・P1b に分割**）
+### P1 — 開発ツール → FastAPI 基礎 → 仕様書の読み方 → デバッガ（10ステップ / **P1a・P1b に分割**）
 
 #### P1a（5ステップ）— 書けるようになる
 
@@ -302,7 +320,7 @@ flowchart LR
 | P1-4 | リクエストボディと 422 | `POST /todos` が Pydantic で検証される | `BaseModel`（ボディ判定）, 422 の自動応答, `Field()` | 🔴 |
 | P1-5 | 返す形を宣言する | `TodoCreate` / `TodoRead` を分け、201 を返す | `response_model`, `status_code`, `model_config` | 🔴 |
 
-#### P1b（4ステップ）— 生成物を読めるようになる
+#### P1b（5ステップ）— 生成物を読めるようになる
 
 | # | タイトル | 作るもの | 初出（FastAPI） | 重要度 |
 | --- | --- | --- | --- | --- |
@@ -310,6 +328,7 @@ flowchart LR
 | P1-7 | 残りの CRUD と 404 | `GET /todos/{id}` `PUT` `DELETE` が揃う。**P1-5 の `id = len(todos) + 1` が DELETE で重なるのを予測問題で踏む** | `HTTPException`, `status` 定数, `responses=`（スキーマへの宣言） | 🔴 |
 | P1-8 | ルーター分割と依存性注入 | `app/routers/todos.py` に切り出し、共通処理を注入。**`__init__.py` と import がここで本番**。**`app.routes` で経路一覧を確認**（`prefix` の付き方を目で見る） | `APIRouter`, `include_router()`, `Depends()` | 🔴 |
 | P1-9 | Zed からブレークポイントで止める | `.zed/debug.json`。`POST /todos` を止めてボディを覗く | —（debugpy / attach） | 🔴 |
+| P1-10 | **欄をまたぐ条件を書く** | `TodoCreate` に `start_date` / `due_date` を足し、**開始日 > 期日を 422** にする。`title` の前後の空白を落とし、空白だけなら弾く。**バリデータの中にブレークポイントを張り、ハンドラより前で止まる**のを見る | `field_validator`, `model_validator(mode="after")`, 検証中の `ValueError` → 422（`value_error`） | 🔴 |
 
 #### P1 で扱う「Python の道具立て」（§4.3.1）
 
@@ -344,6 +363,11 @@ P1-3 の時点で `/docs` を開いても `components.schemas` が空で、`$ref
 **P1-9 を末尾に置いた理由**: `_prompt.md` §2.5 は「`GET /health` が動いた直後」とも書いているが、
 同じ §2.5 の判定基準 5 が **「変数ペインでリクエストボディの中身が見える」** を要求している。
 `GET /health` にボディは無いので、この基準は P1-4 以降でないと満たせない。判定基準を満たせる位置を優先した。
+
+**P1-10 をデバッガの後に置いた理由**: バリデータは「ハンドラより前に動く」と文章で言っても実感しにくい。
+P1-9 でブレークポイントが使えるようになっていれば、**バリデータの中で止まり、ハンドラ側のブレークポイントにはまだ届いていない**ことを
+変数ペインで見られる。P1-4 の「入口で弾く」を、図ではなく実行中の状態として確かめる回になる。
+P1-3 の なぜなぜ③ で「2つの値をまたぐ条件は1つの引数の型では表せない」と挙げた代償の**回収先**でもある（§4.2.1 ルール6）。
 
 **分割を「する」に変えた**: 前回は 8 ステップで「分割しない」を推奨したが、P1-6 が入って **9 ステップ**になり、
 `_prompt.md` §5 の目安（1フェーズ7ステップ）から離れすぎた。P1a / P1b で区切り、**M2（フェーズ末パック）を2回**行う。
@@ -388,7 +412,7 @@ Alembic は**スキーマ変更という設計判断そのもの**を扱う道�
 
 | # | タイトル | 作るもの | 初出（FastAPI） | 重要度 |
 | --- | --- | --- | --- | --- |
-| P3-1 | Session をリクエストごとに配る | `app/database.py` / `get_db` 依存。**`echo=True` で SQL を見えるようにする**（§4.15） | `yield` を使う依存, `Depends()` との組み合わせ（`Annotated` は **P1-3 で既出**）, `def` と `async def` の判断（§4.7 を1回だけ厚く） | 🔴 |
+| P3-1 | Session をリクエストごとに配る | `app/database.py` / `get_db` 依存。**`echo=True` で SQL を見えるようにする**（§4.15） | `yield` を使う依存, `Depends()` との組み合わせ（`Annotated` は **P1-3 で既出**）, `def` と `async def` の判断（§4.7 を1回だけ厚く。**実際の書き換えは P7**） | 🔴 |
 | P3-2 | テーブルを ORM モデルで定義する | `app/models/todo.py` | —（`DeclarativeBase` / `Mapped` / `mapped_column`）+ mypy を1段締める | 🔴 |
 | P3-3 | Alembic を繋いで最初の1本を当てる | `alembic/` / `versions/0001_*.py` | —（`target_metadata` / `--autogenerate` / `upgrade` / `downgrade` を厚く） | 🔴 |
 | P3-4 | CRUD をメモリから DB に差し替える | `app/routers/todos.py` の中身が全部入れ替わる | `from_attributes`（ORM → スキーマ変換）, `select()` の結果を返す, コミット境界と例外 | 🔴 |
@@ -455,6 +479,29 @@ Alembic は**スキーマ変更という設計判断そのもの**を扱う道�
 | P6-4 | 仕上げ: strict 化・フック追加・テストのデバッグ | `pyproject.toml` / `.pre-commit-config.yaml` / `.zed/debug.json` 更新 | —（mypy `strict` / pytest フック / debugpy ポート 5679） | 🟡 |
 | **PJ2** | **URL Shortening Service** | `projects/pj2-url-shortener/` | — | — |
 
+### P7 — 非同期に書き換える（4ステップ）★ v11 で追加
+
+P1〜P6 で作った同期版を、**同じ API のまま**非同期に書き換える。新しい機能は足さない。
+「何が変わり、何が変わらないか」を差分で見るのが目的なので、**P6 のテストが書き換え後もそのまま通ること**を毎ステップの判定基準にする。
+
+| # | タイトル | 作るもの | 初出（FastAPI） | 重要度 |
+| --- | --- | --- | --- | --- |
+| P7-1 | `async def` は何を待つのか | 実験用エンドポイント。`async def` の中で `time.sleep` と `asyncio.sleep` を比べ、**他のリクエストまで止まる**のを2つの `curl` の所要時間で見る | `async def` のパスオペレーション, イベントループ, `def` がスレッドプールで動く仕組み（P3-1 の回収） | 🔴 |
+| P7-2 | DB を非同期ドライバに差し替える | `app/database.py` を非同期版に。ハンドラを `async def` + `await` に | `create_async_engine` / `AsyncSession`, `await session.execute()`, 遅延読み込みが使えない（`MissingGreenlet`）→ P4-5 の `selectinload()` が必須になる | 🔴 |
+| P7-3 | 起動・終了とレスポンス後の処理 | `lifespan` で Engine を片付ける。作成後の通知を `BackgroundTasks` で後回しにする | `lifespan`（`@asynccontextmanager`）, `BackgroundTasks`, 「レスポンスを返した後」に動くものの限界 | 🟡 |
+| P7-4 | テストを非同期にする | `tests/` を非同期クライアントに書き換え、全件 green | `httpx.AsyncClient` + `ASGITransport`, `pytest.mark.anyio`, `dependency_overrides` の再利用 | 🟡 |
+| — | M2: P7 | 同期版と非同期版の差分を読む課題 | — | — |
+
+**非同期ドライバは P7-2 で確定する**（P4 の認証ライブラリと同じ扱い。§2.4）。候補は SQLAlchemy の公式が挙げる
+MySQL 用の非同期ドライバで、**その時点の公式ドキュメントで現行の推奨を確認し、根拠URLを残してから**選ぶ。
+**Alembic は同期ドライバのまま**にする（マイグレーションは1回きりの処理で、非同期にする利点が無い）。この判断も P7-2 で扱う。
+
+> **P7-1 だけは、事故を起こすコードを意図的に載せる**（`async def` の中の同期 I/O）。§4.12-10 の例外。
+> 必ず ❌ のラベルを付け、**計測して止まるのを見せたら、その場で消す**。
+
+> **PJ3 を P7 の後に置く理由**: 座席の同時予約（PJ3）は、同期・非同期どちらでも作れる。
+> 両方を知った状態で「**どちらで作るか**」を設計の問いとして自分で決めるのが、PJ3 の追加の軸になる。
+
 ### 総仕上げ
 
 新しい単元は無し。**PJ3: Movie Reservation System**（`projects/pj3-movie-reservation/`）のみ。
@@ -462,11 +509,11 @@ Alembic は**スキーマ変更という設計判断そのもの**を扱う道�
 
 ### ステップ総数
 
-| Ph | P1a | P1b | P2 | P3 | P4 | P5 | P6 | 計 |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| ステップ数 | 5 | 4 | 3 | 5 | 5 | 3 | 4 | **29** |
+| Ph | P1a | P1b | P2 | P3 | P4 | P5 | P6 | P7 | 計 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| ステップ数 | 5 | **5** | 3 | 5 | 5 | 3 | 4 | **4** | **34** |
 
-これに MP 3回、M2 **7回**（P1a / P1b / P2〜P6）、M3 1回が加わる。
+これに MP 3回、M2 **8回**（P1a / P1b / P2〜P7）、M3 1回が加わる。
 
 ---
 
@@ -506,10 +553,10 @@ MySQL は本編とポートを分けるか DB 名を分けて同一インスタ�
 
 | 出どころ | 扱わない主要項目 | 一次情報 |
 | --- | --- | --- |
-| FastAPI | 非同期DB（`async` ドライバ / `AsyncSession`）、WebSocket、`BackgroundTasks`、`Lifespan`、`SecurityScopes` による細かい権限、サブアプリのマウント、GraphQL、**`fastapi` CLI（`fastapi dev` / `fastapi run`）** | https://fastapi.tiangolo.com/learn/ |
-| Pydantic | カスタムバリデータ（`field_validator` / `model_validator`）、`Discriminated Union`、シリアライザのカスタマイズ、`TypeAdapter` | https://docs.pydantic.dev/latest/ |
+| FastAPI | WebSocket、`SecurityScopes` による細かい権限、サブアプリのマウント、GraphQL、**`fastapi` CLI（`fastapi dev` / `fastapi run`）** | https://fastapi.tiangolo.com/learn/ |
+| Pydantic | `field_validator` の `mode="before"` / `"wrap"`（P1-10 は `"after"` だけ扱う）、`Discriminated Union`、シリアライザのカスタマイズ、`TypeAdapter` | https://docs.pydantic.dev/latest/ |
 | Starlette | Starlette 単体での利用、`Request` / `Response` の低レベル操作、`StreamingResponse`、テンプレート、静的ファイル配信 | https://www.starlette.io/ |
-| SQLAlchemy | Core（Expression Language 単体）、多対多と関連テーブル、`joinedload` / `subqueryload` の使い分け、複合インデックス、`AsyncSession` | https://docs.sqlalchemy.org/en/20/ |
+| SQLAlchemy | Core（Expression Language 単体）、多対多と関連テーブル、`joinedload` / `subqueryload` の使い分け、複合インデックス、非同期での `relationship` の高度な読み込み戦略（P7-2 は `selectinload()` まで） | https://docs.sqlalchemy.org/en/20/ |
 | Alembic | ブランチとマージ、複数DB対応、データ移行を含むマイグレーション、オフラインモード（SQL 出力） | https://alembic.sqlalchemy.org/en/latest/ |
 | OpenAPI | スキーマの手書き、サーバ／クライアントのコード生成、`webhooks`、`callbacks`、複数バージョンの併存 | https://swagger.io/specification/ |
 
@@ -517,11 +564,10 @@ MySQL は本編とポートを分けるか DB 名を分けて同一インスタ�
 > 「ORM を使う」と言いながらリレーションを避けると、ORM の利点も代償もどちらも体験できないため。
 > ただし**多対多は範囲外のまま**にした。中間テーブルの設計が主題になり、FastAPI の話から離れる。
 
-**明示的に範囲外とした3つ**（M3 で必ず再掲する）:
+**明示的に範囲外とした2つ**（M3 で必ず再掲する。v11 で非同期DB を P7 に移したので3つ → 2つ）:
 
 | 領域 | なぜ外すか | 一次情報 |
 | --- | --- | --- |
-| 非同期DB | 同期ドライバ（PyMySQL）で統一する方針のため（§4.7）。混在は事故の元 | https://docs.sqlalchemy.org/en/20/orm/extensions/asyncio.html |
 | アプリ側のコンテナ化 | Docker 学習リポジトリ側で扱う。ここでは DB のみコンテナ | https://docs.docker.com/reference/dockerfile/ |
 | CI（GitHub Actions） | ローカルで pre-commit が回れば学習上は足りる。CI は別テーマ | https://docs.github.com/en/actions |
 
