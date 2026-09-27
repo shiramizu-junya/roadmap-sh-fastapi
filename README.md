@@ -19,6 +19,8 @@ TODO API を作り、次がすべて満たせる状態にする。
 9. 上の力で roadmap.sh のプロジェクト3件を自力で完成できる
 10. `/openapi.json` を jq で読んで構造を説明でき、Swagger UI から認証付きで
     エンドポイントを実行できる
+11. 同じ API を非同期（async def / AsyncSession）に書き換え、async def の中に
+    同期 I/O を混ぜると全体が止まる事故を計測して説明できる
 
 ## 使い方
 
@@ -35,18 +37,19 @@ docs/_prompt.md を読んで、M0 を実行して
 
 | Ph | 内容 | 状態 | プロジェクト |
 |---|---|---|---|
-| P1a | 品質ゲート + FastAPI 基礎（ルーティング / Pydantic） | **P1-5 完了（P1a 完了）** | — |
-| P1b | OpenAPI と Swagger UI の読み方 / DI / デバッガ | 未着手 | — |
+| P1a | 品質ゲート + FastAPI 基礎（ルーティング / Pydantic） | **完了**（M2 まで） | — |
+| P1b | OpenAPI と Swagger UI の読み方 / DI / デバッガ / バリデータ | **P1-6 完了**（5ステップ中1） | — |
 | P2 | 環境と設定（Docker MySQL / pydantic-settings） | 未着手 | — |
 | P3 | ORM で永続化（SQLAlchemy 2.0 / Alembic） | 未着手 | — |
 | P4 | 認証・認可（OAuth2 + JWT）+ リレーションと N+1 | 未着手 | PJ1 |
 | P5 | ミドルウェア層（CORS / ログ / 例外） | 未着手 | — |
 | P6 | テスト（pytest / TestClient） | 未着手 | PJ2 |
+| P7 | 非同期に書き換える（async def / AsyncSession / lifespan） | 未着手 | — |
 | 総仕上げ | — | 未着手 | PJ3 |
 
-**次の一手**: `M2: P1a`（フェーズ末パック: ブランクページ再現 + 宿題）→ その後 `M1: P1 ステップ6`
+**次の一手**: `M1: P1 ステップ7`（残りの CRUD と 404）
 
-教材は `docs/p1a-basics.md`。
+教材は `docs/p1a-basics.md`（P1a と M2）、P1b からは `docs/p1b-openapi.md`。
 
 ## メモ
 
