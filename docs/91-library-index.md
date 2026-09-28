@@ -61,6 +61,9 @@ FastAPI / Pydantic / SQLAlchemy / Alembic / pytest の API を、**1項目1行**
 | `/docs` / `/redoc` | ドックス / リドック | 同じ JSON を描く画面。Swagger UI（試し打ちあり）/ ReDoc（読み物） | **P1-6 / 6-2** |
 | `components.schemas` / `$ref` | コンポーネンツ・スキーマズ / ダラー・レフ | 形の見本帳と、「見本帳のここを見て」の付箋 | **P1-6 / 6-2a** |
 | `tags=` / `summary=` | タグズ / サマリー | 説明書の章分けと見出し。動きは変えない | **P1-6 / 6-2a** |
+| `raise HTTPException(status_code=..., detail=...)` | エイチティーティーピー・エクセプション | 途中で打ち切って番号と一言を返す非常ボタン。`detail` は文字列のまま出る | **P1-7 / 7-2a** |
+| `status.HTTP_404_NOT_FOUND` | ステータス定数 | 番号の名札。**打ち間違いは mypy も止めない** | **P1-7 / 7-2** |
+| `responses={404: {...}}` | レスポンシズ | 仕様書に「この失敗もある」と書き足す。動きは変えない | **P1-7 / 7-2a** |
 | `jq '.a."/b"'` / `keys` / `-c` / `-r` | ジェイキュー | JSON をたどって一部を取り出す。記号を含むキーは `""` で囲む | **P1-6 / 6-2b** |
 
 ## pytest

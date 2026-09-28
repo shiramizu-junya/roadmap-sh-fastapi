@@ -584,8 +584,639 @@ curl -s http://127.0.0.1:8000/openapi.json \
 
 ### 6-9. 📌 進捗の更新
 
-`README.md` の進捗表 P1b を「**P1-6 完了**（4ステップ中1）」、次の一手を `M1: P1 ステップ7` に更新した。
+`README.md` の進捗表 P1b を「**P1-6 完了**（5ステップ中1。v11 で P1-10 が増えた）」、次の一手を `M1: P1 ステップ7` に更新した。
 
 **次のステップ**: P1-7「残りの CRUD と 404」。`GET /todos/{todo_id}` / `PUT` / `DELETE` を足し、見つからないときに **404** を返す。
 **404 を返すだけでは仕様書に出ない**ことを 6-6b の差分で確かめ、`responses=` で宣言して出す。
 P1-5 の 🔓 で予告した「`DELETE` の後に `id` が重なる」も、ここで予測問題として踏む。
+
+---
+
+## P1-7: 残りの CRUD と 404
+
+**作るもの**: `GET /todos/{todo_id}` / `PUT /todos/{todo_id}` / `DELETE /todos/{todo_id}` を足し、**無い ID には 404** を返す。そのうえで 404 を**仕様書にも載せる**
+**重要度**: 🔴 毎日使う — 「1件取る・直す・消す」と「無ければ 404」は、どの API にも必ずある形のため
+**前ステップとの接続**: P1-6 の なぜなぜ③ で「**宣言していないことは仕様書に出ない**」と書いた。その実物をここで作り、`responses=` で直す。P1-5 の 🔓 で予告した **ID の重なり**もここで踏む
+
+### 7-0. このステップの初出トークン
+
+| 系統 | トークン |
+| --- | --- |
+| **FastAPI** | `HTTPException` / `status` 定数（`status.HTTP_404_NOT_FOUND` など）/ `responses=`（3つ = 上限） |
+| **Python** | `for ... in ...:` / `if ...:` / `==` / `raise` / 途中の `return` / `todo.title = ...`（欄への代入）/ `.remove()` / `-> None` / `from itertools import count` と `next()` |
+| **【道具】** | —（該当なし） |
+| **周辺** | — |
+
+> `@app.put` と `@app.delete` は、`@app.post` の**メソッド違い**なので初出に数えない（P1-4 の 4-2 と同じ仕組み）。
+
+---
+
+### 7-1. コード（段階1: まず動かす）
+
+**2段階で書く。** 段階1では「404 を投げるだけ」「ID の振り方は今のまま」で動かし、7-6 で**その問題を2つ踏んでから**段階2で直す。
+
+#### 要件（段階1）
+
+1. `find_todo(todo_id)` という**普通の関数**（`@` の貼り紙なし）を作る。リストから ID が一致する TODO を探して返し、**無ければ 404 を投げる**
+2. `GET /todos/{todo_id}`: 1件返す
+3. `PUT /todos/{todo_id}`: ボディは `TodoCreate`。**`title` と `done` を丸ごと置き換えて**、置き換えた後の TODO を返す
+4. `DELETE /todos/{todo_id}`: 消して **204**（ボディ無し）を返す
+5. 3つとも、無い ID なら **404**、ボディは `{"detail": "TODO が見つかりません"}`
+6. ステータス番号は**数字で書かず** `status.HTTP_201_CREATED` のような定数で書く（既存の `201` も置き換える）
+7. `id` の振り方（`len(todos) + 1`）は**まだ変えない**
+
+#### 骨組み: `app/main.py`（足す部分だけ）
+
+```python
+from fastapi import FastAPI, HTTPException, status
+
+
+def find_todo(todo_id: int) -> TodoRead:
+    # TODO: todos を1件ずつ見て、id が一致したらそれを返す
+    # TODO: 最後まで見つからなければ 404 の HTTPException を raise する
+    ...
+
+
+@app.get("/todos/{todo_id}")  # TODO: tags / summary
+def read_todo(todo_id: int) -> TodoRead:
+    ...
+
+
+@app.put("/todos/{todo_id}")  # TODO: tags / summary
+def update_todo(todo_id: int, body: TodoCreate) -> TodoRead:
+    # TODO: find_todo で取ってきて、title と done を body の値で書き換えて返す
+    ...
+
+
+@app.delete("/todos/{todo_id}")  # TODO: 204 / tags / summary
+def delete_todo(todo_id: int) -> None:
+    # TODO: find_todo で取ってきて、リストから取り除く（return は書かない）
+    ...
+```
+
+<details><summary>段階1の完成形（自分で書いてから開く）</summary>
+
+`app/main.py`（全文）
+
+```python
+from fastapi import FastAPI, HTTPException, status
+
+from app.schemas.todo import TodoCreate, TodoRead
+
+app = FastAPI()
+
+todos: list[TodoRead] = []
+
+
+def find_todo(todo_id: int) -> TodoRead:
+    for todo in todos:
+        if todo.id == todo_id:
+            return todo
+    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="TODO が見つかりません")
+
+
+@app.get("/health", tags=["health"], summary="死活確認")
+def health() -> dict[str, str]:
+    return {"status": "ok"}
+
+
+@app.post(
+    "/todos",
+    status_code=status.HTTP_201_CREATED,
+    tags=["todos"],
+    summary="TODO を1件作る",
+)
+def create_todo(todo: TodoCreate) -> TodoRead:
+    new_todo = TodoRead(id=len(todos) + 1, title=todo.title, done=todo.done)
+    todos.append(new_todo)
+    return new_todo
+
+
+@app.get("/todos", tags=["todos"], summary="TODO 一覧を取得")
+def list_todos() -> list[TodoRead]:
+    return todos
+
+
+@app.get("/todos/{todo_id}", tags=["todos"], summary="TODO を1件取得")
+def read_todo(todo_id: int) -> TodoRead:
+    return find_todo(todo_id)
+
+
+@app.put("/todos/{todo_id}", tags=["todos"], summary="TODO を丸ごと置き換える")
+def update_todo(todo_id: int, body: TodoCreate) -> TodoRead:
+    todo = find_todo(todo_id)
+    todo.title = body.title
+    todo.done = body.done
+    return todo
+
+
+@app.delete(
+    "/todos/{todo_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    tags=["todos"],
+    summary="TODO を削除する",
+)
+def delete_todo(todo_id: int) -> None:
+    todo = find_todo(todo_id)
+    todos.remove(todo)
+```
+
+（`create_todo` の docstring は紙幅のため省いた。残しておいてよい）
+
+</details>
+
+✅ 検証済み: Python 3.12.13 / FastAPI 0.141.1 / Pydantic 2.13.5 / jq 1.8.2。
+段階1・段階2の完成形をそれぞれ別の場所にコピーして `ruff check` / `ruff format --check` / `mypy` がすべて通ることを確認。実レスポンスは 7-6。
+
+---
+
+### 7-1b. 📊 図解
+
+#### (a) `raise` は、呼んだ関数を飛び越えて FastAPI まで届く
+
+```mermaid
+sequenceDiagram
+    participant C as curl
+    participant F as FastAPI
+    participant H as read_todo()
+    participant FT as find_todo()
+
+    C->>F: GET /todos/99
+    F->>H: todo_id=99 で呼ぶ
+    H->>FT: find_todo(99)
+    FT->>FT: 全部見たが無い
+    FT--xF: raise HTTPException(404)
+    Note over H: return まで進まない
+    F--xC: 404 {"detail": "TODO が見つかりません"}
+```
+
+✅ 描画確認済み: mermaid 12.0.0 でパース通過。
+
+**`find_todo` から投げた 404 は、`read_todo` の中を素通りして FastAPI まで届く。** `read_todo` の `return` は実行されない。
+`read_todo` の側に「見つからなかったら…」という `if` が1行も無いのは、このため。
+
+#### (b) `len(todos) + 1` で番号を振ると、なぜ重なるのか
+
+```mermaid
+flowchart LR
+    A["3件ある<br/>id 1, 2, 3"]
+    B["id 1 を削除<br/>残り id 2, 3"]
+    C["次の番号は<br/>len 2 + 1 = 3"]
+    D["id 3 が2件"]
+    E["GET /todos/3 は<br/>先に見つかった方だけ"]
+    A --> B --> C --> D --> E
+```
+
+✅ 描画確認済み: mermaid 12.0.0 でパース通過。
+
+**「件数 + 1」は、消さないうちだけ「最後の番号 + 1」と一致する。** 消した瞬間にずれる。7-6 の Q3 で実際に起こす。
+
+---
+
+### 7-2a. 🔤 入口の2行
+
+#### 🔤 `raise HTTPException(status_code=404, detail="...")`
+**読み方**: 「レイズ・エイチティーティーピー・エクセプション、ステータスコード…、ディテール…」
+**要するに**: **「この話はここで打ち切り。お客さんにはこの番号とこの一言を返して」**と、途中から店長に伝える非常ボタン。
+
+#### 🔤 `status.HTTP_404_NOT_FOUND`
+**読み方**: 「ステータス・ドット・エイチティーティーピー・よんまるよん・ノット・ファウンド」
+**要するに**: **番号に名札を付けたもの**。中身はただの `404` だが、読んだだけで意味が分かる。
+
+#### 🔤 `responses={404: {"description": "..."}}`
+**読み方**: 「レスポンシズ・イコール…」
+**要するに**: 取扱説明書に「**こういう失敗の返事もあります**」と書き足す欄。動きは変えない。
+
+---
+
+### 7-2. 🔬 仕組み解剖
+
+| 部品 | 正式名称 | 実行時に何が起きるか |
+| --- | --- | --- |
+| `raise HTTPException(...)` | HTTP エラーの例外 | 投げた瞬間に、その関数も**呼び出し元の関数も**途中で止まる。FastAPI（正確には Starlette の例外の受け口）が受け取り、`{"detail": ...}` の JSON と指定の番号に変える。**`detail` は文字列そのまま**（422 の `detail` は配列だった。読み分ける） |
+| `status.HTTP_404_NOT_FOUND` | ステータスコードの定数 | 中身は整数の `404`。**実行時の違いは一切無い**。違いは**読みやすさ**と**エディタの補完**。⚠️ ただし打ち間違い（`HTTP_404_NOT_FUOND`）は **ruff も mypy も止めない**（下の注） |
+| `responses={...}` | 追加のレスポンス | **起動時に**デコレータが受け取り、仕様書の `responses` に1行足すだけ。**404 を返す動き自体は `raise` が作っている**。`responses=` を書かなくても 404 は返るし、書いても `raise` が無ければ返らない |
+
+**いつ評価されるか**: `responses=` と `status_code=` は起動時。`raise` はリクエストごと（見つからなかったときだけ）。
+
+> ⚠️ **定数の打ち間違いは、実行されるまで見つからない**（実際に試して確認した）
+> `status` の中身は Starlette が用意していて、**古い名前でも動くようにする仕組み**（名前を受け取って整数を返す関数）を持っている。
+> そのため mypy には「`status.` の後ろには**どんな名前でも**整数がある」ように見え、`HTTP_404_NOT_FUOND` も通してしまう。
+> 実行すると `AttributeError: module 'starlette.status' has no attribute 'HTTP_404_NOT_FUOND'` になる。
+> - **デコレータの中**（`status_code=...`）で打ち間違えた → **起動時に**落ちるので、すぐ気づく
+> - **`raise` の中**で打ち間違えた → **404 になるはずのリクエストが来たときに初めて**落ち、しかも **500** になる
+>
+> 後者は、正常系しか試していないと気づけない。**失敗の道も1回は叩く**（7-6 がまさにそれ）。P6 のテストで 404 のケースを書くのは、これを自動で見つけるため。
+
+**どの道具の責務か**: 例外を投げるのは**あなたのコード**、受け取って JSON に変えるのは **Starlette / FastAPI**、仕様書に書くのは **`responses=` を読んだ FastAPI**。
+**動き（`raise`）と宣言（`responses=`）が別の場所にある**のが、このステップの要点。
+
+**失敗したらどうなるか**: 3つを区別する。
+
+| リクエスト | 番号 | どこで決まったか |
+| --- | --- | --- |
+| `GET /todos/99` | **404** `{"detail":"TODO が見つかりません"}` | あなたの `raise` |
+| `GET /todos/abc` | **422** `loc: ["path","todo_id"]` | 入口の門（ハンドラは呼ばれない。P1-3 と同じ） |
+| `PUT /todos`（ID 無し） | **405** | 経路表（パスはあるがメソッドが違う。P1-2 と同じ） |
+
+**既知スタックとの対応**: Express の `res.status(404).json({...}); return;` が近い。
+違いは、Express では**呼んだ関数の中からは返せない**（`res` を渡すか、戻り値で知らせて呼び出し元で分岐する）のに対し、
+`raise` は**何段下の関数からでも**一気に FastAPI まで届くこと。NestJS の `throw new NotFoundException()` は、ほぼ同じ考え方。
+
+---
+
+### 7-3. 🐍 Python解説
+
+#### 🐍 `for todo in todos:`
+
+**読み方**: 「フォー・トゥードゥー・イン・トゥードゥーズ」
+
+**たとえ**: ファイルに綴じた用紙を、**上から1枚ずつめくって見る**。いまめくっている1枚を `todo` と呼ぶ。
+
+**正確には**:
+- `for 名前 in 入れ物:` = 入れ物の中身を**先頭から1つずつ**取り出し、そのたびに字下げされた範囲を実行する
+- `todo` という名前は**ここで初めて作られる**。1周ごとに、次の中身を指すように付け替わる
+- 最後まで見終わると、`for` の下（字下げが戻った行）に進む
+- 行末の `:` と字下げは `def` / `class` と同じ（P1-2 の 2-3）
+
+**TS なら**: `for (const todo of todos) { ... }`。**`of` ではなく `in`**、`()` と `{}` が無く字下げで範囲を表す。
+⚠️ TS の `for...in` はキー（添え字）を回すが、**Python の `for...in` は中身そのもの**を回す。名前が同じで意味が違うので注意。
+
+#### 🐍 `if todo.id == todo_id:`
+
+**読み方**: 「イフ・トゥードゥー・ドット・アイディー・イコールイコール・トゥードゥー・アイディー」
+
+**たとえ**: 「**もし番号が一致したら**、下の作業をする」。一致しなければ飛ばす。
+
+**正確には**:
+- `if 条件:` = 条件が成り立つときだけ、字下げされた範囲を実行する
+- `==` = 左右が**同じ値か**を調べる。`=`（名前を付ける）とは別物。`if todo.id = todo_id:` と書くと**文法エラー**で起動しない
+- TS の `===` にあたる。Python には `===` は無く、`==` が「型も含めて同じか」を見る（`1 == "1"` は `False`）
+
+**TS なら**: `if (todo.id === todoId) { ... }`。`()` と `{}` が無い。
+
+#### 🐍 途中の `return` と、最後の `raise`
+
+```python
+    for todo in todos:
+        if todo.id == todo_id:
+            return todo
+    raise HTTPException(...)
+```
+
+**正確には**:
+- `return` は**その場で関数を終わらせる**（P1-2 の 2-3）。`for` の途中でも、見つかった時点で抜ける
+- だから `raise` の行に来るのは、**最後まで見て一度も `return` しなかったとき**だけ
+- `raise 例外` = **例外（「もう続けられない」という知らせ）を投げる**。投げた瞬間に関数が止まり、呼んだ側の関数も止まり、**受け取る人がいるところまで**一気に戻る。FastAPI では、受け取るのは FastAPI 自身
+
+**TS なら**: `raise` は `throw`。`HTTPException(...)` の前に `new` は付けない（P1-5 の 5-3）。
+
+#### 🐍 `todo.title = body.title`（欄への代入）
+
+**正確には**: P1-5 の `todo.title` は**欄を読む**だった。左側に置いて `=` を付けると、**欄の中身を書き換える**。
+`find_todo` が返したのは**リストに入っているのと同じ1枚**（コピーではない）なので、書き換えればリストの中身も変わっている。TS のオブジェクトと同じ。
+
+⚠️ **Pydantic は、この代入では検証しない**（既定の設定）。`todo.title = ""` と書いても通ってしまう。
+ここでは `body` が入口の門を通った後なので安全だが、「代入でも検証されている」と思い込まない。
+
+#### 🐍 `todos.remove(todo)` と `-> None`
+
+**正確には**:
+- `.remove(x)` = リストから **x と同じものを1つ**取り除く（`append` の逆）。リストそのものが変わる
+- `-> None` = 「**何も返さない**」関数の印。`return` を書かないと、関数は自動で `None` を返す
+- FastAPI は `status_code=204` と `None` の組み合わせで、**ボディの無い**レスポンスを返す
+
+**TS なら**: `.remove` に直接の対応物は無い（`splice(indexOf(x), 1)`）。`-> None` は `: void`。
+
+#### 🐍 `from itertools import count` / `next(todo_ids)`（段階2で使う）
+
+**読み方**: 「フロム・イターツールズ・インポート・カウント」「ネクスト」
+
+**たとえ**: 銀行の**番号札の発券機**。ボタンを押すたびに 1, 2, 3, ... と1枚ずつ出てくる。**前の人が帰っても、番号は戻らない**。
+
+**正確には**:
+- `count(1)` = 1 から始まる番号を**1つずつ出せる**ものを作る。まだ番号は出ていない
+- `next(x)` = x から**次の1つ**を取り出す。`count` に対して呼ぶたびに、1, 2, 3, ... と増える
+- `itertools` は Python に**最初から付いている**部品箱（`uv add` は要らない）
+
+**TS なら**: 対応物なし（ジェネレータ関数 `function*` で自作すれば近いものは作れる）。単に `let nextId = 1; nextId++` と書くのが一番近い。
+Python で同じことを関数の中から書き換えるには別の文法（`global`）が要るので、ここでは発券機を使う。
+
+---
+
+### 7-3a. 🐍 Python の道具立て ／ 7-3b. 🧩 周辺注
+
+このステップでは該当なし。
+
+---
+
+### 7-4. 解説 — なぜこう設計するか
+
+#### 🪜 なぜなぜ: なぜ 404 は `return` せずに `raise` するのか
+
+**なぜ① `find_todo` の中で `raise` すると、なぜ `read_todo` を飛び越えて 404 になるのか**
+→ 例外は**受け取る人がいるところまで、呼び出しの道を逆向きに一気に戻る**（Python の言語の決まり）。
+`read_todo` にも `find_todo` にも受け取る仕組みが無いので素通りし、その外側で待っている **FastAPI（Starlette）の例外の受け口**に届く。
+受け口は `HTTPException` を見ると、中の `status_code` と `detail` から JSON のレスポンスを作る。
+根拠: https://fastapi.tiangolo.com/tutorial/handling-errors/#use-httpexception
+
+**なぜ② `return` で「404 です」と返すのでは、なぜだめなのか**
+→ **`return` は呼んだ関数にしか届かない**から。`find_todo` が「404 です」と `return` すると、受け取るのは `read_todo` で、
+`read_todo` / `update_todo` / `delete_todo` の3か所すべてに「404 が返ってきたら…」という `if` が要る。
+さらに `find_todo` の戻り値の型が「`TodoRead` か、404 か」になり、**`-> TodoRead` と書けなくなる**（mypy が使う側に毎回の確認を求める）。
+`raise` なら、**戻り値の型は「見つかった場合」だけを表し**、見つからない場合は別の道で FastAPI に直接届く。
+
+**なぜ③ では、`raise` で飛ばす方式は何を失うのか** 🤔 まず自分で考える
+
+<details><summary>答え</summary>
+
+**「この関数は 404 を投げるかもしれない」が、どこにも書かれない。**
+`def find_todo(todo_id: int) -> TodoRead:` を見ても、404 の可能性は読み取れない。mypy も知らない。
+そして**仕様書にも出ない**（7-6 の Q2 で確かめる）。P1-6 の なぜなぜ③ で挙げた「宣言していないことは仕様書に出ない」の典型。
+
+**手当て**（§4.2.1 ルール6）
+
+| 失うもの | 手当て | 扱う場所 |
+| --- | --- | --- |
+| 仕様書に出ない | `responses=` で**宣言として**書き足す | **このステップの段階2** |
+| 投げる場所が散らばる | 例外ハンドラで、例外 → レスポンスの変換を**1か所**にまとめる | **P5-3** |
+| 関数の型に出ない | **この教材では手当てしない。** Python の型には「投げうる例外」を書く欄が無い（言語の設計）。関数名（`find_...` / `get_or_404` など）と docstring で伝えるのが慣習 |
+
+</details>
+
+> 🧠 **FastAPI の考え方**: **動きは `raise`、約束は `responses=`。** 別々に書くので、片方だけ直すとズレる。
+> 404 を投げるコードを足したら、同じ PR で `responses=` も足す。
+
+---
+
+### 7-5. 🏢 実務メモ ／ ⚠️ アンチパターン ／ 🔓 教材用の簡略化
+
+> 🏢 **実務メモ**: ステータス番号は `status.HTTP_404_NOT_FOUND` のような**定数で書く**。中身は同じ整数だが、
+> 読んだだけで意味が分かり、エディタが候補を出してくれる。FastAPI の公式もこの書き方を「名前を覚えるための近道」として紹介している。
+> （打ち間違いは静的チェックでは見つからない。7-2 の注）
+> 根拠: https://fastapi.tiangolo.com/tutorial/response-status-code/#shortcut-to-remember-the-names
+
+> ⚠️ **アンチパターン**: 見つからないときに **200 と `null`** を返す。クライアントは「成功して中身が空」と「そもそも無い」を区別できない。
+> HTTP の仕様は、対象が見つからないことを 404 で表すと定めている。
+> 根拠: https://www.rfc-editor.org/rfc/rfc9110#name-404-not-found
+
+> 🔓 **教材用の簡略化**: 段階2の発券機（`count`）は**サーバを再起動すると 1 に戻る**。リストも消えるので今は困らないが、
+> データだけが残る仕組み（DB）にすると番号が重なる。
+> **本番では**: 番号は DB に振らせる（**P3** の自動採番）。
+> 根拠: https://dev.mysql.com/doc/refman/8.0/en/example-auto-increment.html
+
+---
+
+### 7-6. 🔮 予測 → 動作確認（段階1のコードで）
+
+**先に予想してから実行する。**
+
+1. `done: true` にした TODO に、`PUT` で `{"title":"..."}` だけを送ると、`done` はどうなるか
+2. `GET /todos/{todo_id}` の `responses` のキーは何か。**404 は入っているか**
+3. 3件作り、`id` 1 を消してから1件作る。**新しい TODO の `id` は何か**。その後 `GET /todos/3` は何を返すか
+
+サーバを起動し、3件作っておく。
+
+```bash
+uv run uvicorn app.main:app --port 8000 --reload
+```
+```bash
+for t in 牛乳 卵 パン; do
+  curl -sS -X POST http://127.0.0.1:8000/todos \
+    -H 'Content-Type: application/json' -d "{\"title\":\"$t\"}" | jq -c
+done
+```
+```
+{"id":1,"title":"牛乳","done":false}
+{"id":2,"title":"卵","done":false}
+{"id":3,"title":"パン","done":false}
+```
+
+（`for ... in ...; do ...; done` はシェルの繰り返し。Python の `for` と考え方は同じ。`-d` の中で `$t` を使うため、外側を `"` で囲んでいる）
+
+<details><summary>実行と結果</summary>
+
+**まず 404 / 422 / 405 の3つを見分ける**
+
+```bash
+curl -sS -w '%{stderr}%{http_code}\n' http://127.0.0.1:8000/todos/99 | jq -c
+curl -sS -w '%{stderr}%{http_code}\n' http://127.0.0.1:8000/todos/abc | jq -c
+curl -sS -w '%{stderr}%{http_code}\n' -X PUT http://127.0.0.1:8000/todos \
+  -H 'Content-Type: application/json' -d '{"title":"x"}' | jq -c
+```
+```
+404
+{"detail":"TODO が見つかりません"}
+422
+{"detail":[{"type":"int_parsing","loc":["path","todo_id"],"msg":"Input should be a valid integer, unable to parse string as an integer","input":"abc"}]}
+405
+{"detail":"Method Not Allowed"}
+```
+
+**`detail` の形が違う。** 404 は**文字列**（あなたが `detail=` に書いたもの）、422 は**配列**（Pydantic の失敗の一覧）。
+クライアント側でエラーを表示するときは、この2つを読み分ける必要がある（揃えたくなったら **P5-3**）。
+
+**1 の答え: `false` に戻る**
+
+```bash
+curl -sS -X PUT http://127.0.0.1:8000/todos/2 \
+  -H 'Content-Type: application/json' -d '{"title":"卵を2パック","done":true}' | jq -c
+curl -sS -X PUT http://127.0.0.1:8000/todos/2 \
+  -H 'Content-Type: application/json' -d '{"title":"卵を3パック"}' | jq -c
+```
+```
+{"id":2,"title":"卵を2パック","done":true}
+{"id":2,"title":"卵を3パック","done":false}
+```
+
+ボディは `TodoCreate` なので、`done` を送らなければ**既定値の `false`** が入り、それで**丸ごと置き換え**られた。
+これが PUT の意味（**送った内容で置き換える**）。一部だけ直したいなら PATCH という別のメソッドを使うのが普通だが、この教材では扱わない。
+根拠: https://www.rfc-editor.org/rfc/rfc9110#name-put
+
+**2 の答え: `["200", "422"]`。404 は入っていない**
+
+```bash
+curl -s http://127.0.0.1:8000/openapi.json | jq -c '.paths."/todos/{todo_id}".get.responses | keys'
+```
+```json
+["200","422"]
+```
+
+**さっき実際に 404 を返したのに、仕様書には無い。** `raise` は動きであって宣言ではないから（7-4 のなぜなぜ③）。
+
+**3 の答え: 新しい TODO も `id: 3`。`GET /todos/3` は古いほうを返す**
+
+```bash
+curl -sS -w '%{stderr}%{http_code}\n' -X DELETE http://127.0.0.1:8000/todos/1 | jq -c
+curl -sS -X POST http://127.0.0.1:8000/todos \
+  -H 'Content-Type: application/json' -d '{"title":"りんご"}' | jq -c
+curl -sS http://127.0.0.1:8000/todos | jq -c
+curl -sS http://127.0.0.1:8000/todos/3 | jq -c
+```
+```
+204
+{"id":3,"title":"りんご","done":false}
+[{"id":2,"title":"卵を3パック","done":false},{"id":3,"title":"パン","done":false},{"id":3,"title":"りんご","done":false}]
+{"id":3,"title":"パン","done":false}
+```
+
+- `DELETE` は `204` だけが出て、**JSON は何も出ない**（ボディが空なので `jq` は何もせずに終わる）
+- `id: 3` が**2件**ある。残り2件なので `len(todos) + 1 = 3`
+- `GET /todos/3` は `find_todo` が**先に見つけたほう**（パン）を返す。**りんごには、もう ID で届かない**
+- 同じ `DELETE /todos/1` をもう一度送ると `404`（もう無いので）
+</details>
+
+✅ 検証済み（上の出力はすべて段階1のコードを実行して取得）。
+
+### 7-6a. 段階2: 見つけた2つの問題を直す
+
+#### 要件（段階2）
+
+1. 3つのエンドポイントに `responses=` で **404 を宣言**する（説明文は「指定した ID の TODO が無い」）
+2. `id` を**発券機**（`itertools.count`）で振り、**消しても番号が戻らない**ようにする
+
+<details><summary>段階2の完成形（変わる部分だけ）</summary>
+
+```python
+from itertools import count
+
+from fastapi import FastAPI, HTTPException, status
+
+from app.schemas.todo import TodoCreate, TodoRead
+
+app = FastAPI()
+
+todos: list[TodoRead] = []
+# 1, 2, 3, ... と番号を1枚ずつ出す発券機。消しても番号は戻らない
+todo_ids = count(1)
+
+# （find_todo と /health は段階1のまま）
+
+
+@app.post(
+    "/todos",
+    status_code=status.HTTP_201_CREATED,
+    tags=["todos"],
+    summary="TODO を1件作る",
+)
+def create_todo(todo: TodoCreate) -> TodoRead:
+    new_todo = TodoRead(id=next(todo_ids), title=todo.title, done=todo.done)
+    todos.append(new_todo)
+    return new_todo
+
+
+@app.get(
+    "/todos/{todo_id}",
+    tags=["todos"],
+    summary="TODO を1件取得",
+    responses={status.HTTP_404_NOT_FOUND: {"description": "指定した ID の TODO が無い"}},
+)
+def read_todo(todo_id: int) -> TodoRead:
+    return find_todo(todo_id)
+```
+
+`update_todo` と `delete_todo` にも、同じ `responses=...` の1行を足す。
+
+</details>
+
+✅ 検証済み: 段階2で同じ手順を踏むと、`id` 1 を消した後の新しい TODO は **`id: 4`**、さらに `id` 4 を消した後は **`id: 5`**。重ならない。
+
+> ⚠️ **やりがち**: 3か所に同じ `responses=` を書くのが嫌で、辞書を変数に入れて使い回すと、**mypy が止める**。
+> ```
+> app/main.py:45: error: Argument "responses" to "get" of "FastAPI" has incompatible type "dict[int, dict[str, str]]"; expected "dict[int | str, dict[str, Any]] | None"  [arg-type]
+> ```
+> ✅ 検証済み（実際に出した出力）。
+> 変数に入れると、mypy が中身から**狭い型**（`dict[int, dict[str, str]]`）を決めてしまい、FastAPI が求める**広い型**と合わなくなる。
+> デコレータの中に直接書けば、mypy は「FastAPI が求める型として」中身を読むので通る。
+> **今は3か所に書く。** 同じものを何度も書く問題は、次の **P1-8**（ルーターにまとめる回）で `APIRouter` 側にまとめて片付く。
+
+---
+
+### 7-6b. 🧾 OpenAPI スキーマの差分
+
+`responses=` を足す前（段階1）と後（段階2）で、`/todos/{todo_id}` の3つのメソッドの `responses` を比べる。
+
+```bash
+curl -s http://127.0.0.1:8000/openapi.json \
+  | jq -c '.paths."/todos/{todo_id}" | map_values(.responses | keys)'
+```
+
+**段階1**
+```json
+{"get":["200","422"],"put":["200","422"],"delete":["204","422"]}
+```
+
+**段階2**
+```json
+{"get":["200","404","422"],"put":["200","404","422"],"delete":["204","404","422"]}
+```
+
+```bash
+curl -s http://127.0.0.1:8000/openapi.json | jq -c '.paths."/todos/{todo_id}".get.responses."404"'
+```
+```json
+{"description":"指定した ID の TODO が無い"}
+```
+
+✅ 検証済み（段階1・段階2のそれぞれで実行して取得。`map_values` は「各キーの中身に同じ処理をする」jq の書き方で、3メソッドを1行で比べるために使った）。
+
+- **動き（404 を返すこと）は段階1から変わっていない。変わったのは仕様書だけ。**
+- `404` には `description` しか無く、**ボディの形（`content`）が無い**。`{"detail": "..."}` という形までは宣言していないため。
+  形まで載せる書き方（`responses={404: {"model": ...}}`）もあるが、この教材では扱わない
+- P1-6 の 3-6b で予告した `parameters` が戻ってきた:
+
+```bash
+curl -s http://127.0.0.1:8000/openapi.json | jq -c '.paths."/todos/{todo_id}".get.parameters'
+```
+```json
+[{"name":"todo_id","in":"path","required":true,"schema":{"type":"integer","title":"Todo Id"}}]
+```
+
+`"in": "path"` と `"type": "integer"`。P1-3 で書いた「パスにある名前の引数 → path、`int` → integer」が、そのまま写っている。
+
+---
+
+### 7-7. ✅ 想起チェック
+
+1. `find_todo` の中で `raise` した 404 は、`read_todo` のどの行を実行せずに FastAPI に届くか
+2. 404 の `detail` と 422 の `detail` は、形がどう違うか
+3. `responses=` を書かずに 404 を返すと何が起きるか。`responses=` だけ書いて `raise` しないと何が起きるか
+4. `len(todos) + 1` で番号を振ると、どういう手順で重なるか
+5. `PUT` で `done` を送らないと `false` に戻るのはなぜか
+
+<details><summary>答え</summary>
+
+1. **`return find_todo(todo_id)` の `return`**。`find_todo` が戻ってこないので、`read_todo` はそこで止まる
+2. **404 は文字列**（`detail=` に書いたもの）、**422 は配列**（Pydantic の失敗の一覧で、各要素に `loc` / `msg` / `type`）
+3. 前者: **404 は返るが仕様書に載らない**。後者: **仕様書に 404 と書いてあるのに、実際には返らない**。どちらも「約束と動きのズレ」
+4. 3件作る（1, 2, 3）→ 1 を消す（残り 2 件）→ `2 + 1 = 3` → **3 が2件**
+5. **ボディが `TodoCreate` で、`done` の既定値が `False` だから。** PUT は送った内容で丸ごと置き換える
+</details>
+
+---
+
+### 7-8. 初出トークンの回収確認
+
+| トークン | 扱い |
+| --- | --- |
+| `HTTPException` | 7-2a / 7-2 で仕組み解剖 / 7-1b(a) の図 / 7-4 なぜなぜ（代償の手当ては段階2・**P5-3**） |
+| `status` 定数 | 7-2a / 7-2（打ち間違いが静的チェックを抜ける注つき）/ 7-5 実務メモ |
+| `responses=` | 7-2a / 7-2 / 7-6a / 7-6b で差分（**P1-6 の ⏭️「P1-7 の `responses=` で回収」を回収**） |
+| `for` / `if` / `==` / 途中の `return` / `raise` | 7-3 で Python解説 |
+| 欄への代入 / `.remove()` / `-> None` | 7-3 で Python解説（代入は検証されない注意つき） |
+| `itertools.count` / `next()` | 7-3 で Python解説 / 7-6a で使用 |
+| ID の重なり | 7-1b(b) / 7-6 の Q3 で実際に踏み、7-6a で修正（**P1-5 の 🔓 を回収**） |
+| `parameters`（`"in": "path"`） | 7-6b（**P1-3 の 3-6b、P1-6 の 6-8 の予告を回収**） |
+| 同じ `responses=` を3回書く | ⏭️ **P1-8** で `APIRouter` にまとめる |
+
+**未回収: 0件**（`⏭️` 宣言は2件: P1-8 / P5-3）
+
+---
+
+### 7-9. 📌 進捗の更新
+
+`README.md` の進捗表 P1b を「**P1-7 完了**（5ステップ中2）」、次の一手を `M1: P1 ステップ8` に更新した。
+
+**次のステップ**: P1-8「ルーター分割と依存性注入」。`/todos` の5つを `app/routers/todos.py` に移し、`app/main.py` を薄くする。
+**`__init__.py` と import がここで本番**（壊れたときの読み方も）。`find_todo` を**依存（`Depends()`）**に変え、ハンドラの引数で受け取る形にする。
+3回書いた `responses=` と `tags=` は `APIRouter` 側にまとめる。最後に `app.routes` で経路の一覧を確かめる（P1-2 の なぜなぜ③ の2つ目の手当て）。

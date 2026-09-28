@@ -38,7 +38,7 @@ docs/_prompt.md を読んで、M0 を実行して
 | Ph | 内容 | 状態 | プロジェクト |
 |---|---|---|---|
 | P1a | 品質ゲート + FastAPI 基礎（ルーティング / Pydantic） | **完了**（M2 まで） | — |
-| P1b | OpenAPI と Swagger UI の読み方 / DI / デバッガ / バリデータ | **P1-6 完了**（5ステップ中1） | — |
+| P1b | OpenAPI と Swagger UI の読み方 / DI / デバッガ / バリデータ | **P1-7 完了**（5ステップ中2） | — |
 | P2 | 環境と設定（Docker MySQL / pydantic-settings） | 未着手 | — |
 | P3 | ORM で永続化（SQLAlchemy 2.0 / Alembic） | 未着手 | — |
 | P4 | 認証・認可（OAuth2 + JWT）+ リレーションと N+1 | 未着手 | PJ1 |
@@ -47,7 +47,7 @@ docs/_prompt.md を読んで、M0 を実行して
 | P7 | 非同期に書き換える（async def / AsyncSession / lifespan） | 未着手 | — |
 | 総仕上げ | — | 未着手 | PJ3 |
 
-**次の一手**: `M1: P1 ステップ7`（残りの CRUD と 404）
+**次の一手**: `M1: P1 ステップ8`（ルーター分割と依存性注入）
 
 教材は `docs/p1a-basics.md`（P1a と M2）、P1b からは `docs/p1b-openapi.md`。
 
