@@ -1,0 +1,10 @@
+[
+    {
+        "label": "Attach to FastAPI",
+        "adapter": "Debugpy",
+        "request": "attach",
+        "connect": { "host": "127.0.0.1", "port": 5678 },
+        "cwd": "$ZED_WORKTREE_ROOT",
+        "justMyCode": true,
+    },
+]
