@@ -1128,7 +1128,8 @@ def read_todo(todo_id: int) -> TodoRead:
 > ✅ 検証済み（実際に出した出力）。
 > 変数に入れると、mypy が中身から**狭い型**（`dict[int, dict[str, str]]`）を決めてしまい、FastAPI が求める**広い型**と合わなくなる。
 > デコレータの中に直接書けば、mypy は「FastAPI が求める型として」中身を読むので通る。
-> **今は3か所に書く。** 同じものを何度も書く問題は、次の **P1-8**（ルーターにまとめる回）で `APIRouter` 側にまとめて片付く。
+> **今は3か所に書く。** 同じものを何度も書く問題は、次の **P1-8** で片付ける。
+> （当初は「`APIRouter` 側にまとめる」と予告していたが、実際に試すと**仕様書が嘘になる**ことが分かったので、P1-8 では別の形で解く。理由は P1-8 の 8-6 Q3）
 
 ---
 
@@ -1219,4 +1220,1047 @@ curl -s http://127.0.0.1:8000/openapi.json | jq -c '.paths."/todos/{todo_id}".ge
 
 **次のステップ**: P1-8「ルーター分割と依存性注入」。`/todos` の5つを `app/routers/todos.py` に移し、`app/main.py` を薄くする。
 **`__init__.py` と import がここで本番**（壊れたときの読み方も）。`find_todo` を**依存（`Depends()`）**に変え、ハンドラの引数で受け取る形にする。
-3回書いた `responses=` と `tags=` は `APIRouter` 側にまとめる。最後に `app.routes` で経路の一覧を確かめる（P1-2 の なぜなぜ③ の2つ目の手当て）。
+3回書いた `tags=` は `APIRouter` 側にまとめる（`responses=` の扱いは P1-8 の 8-6 Q3）。最後に経路の一覧を起動せずに確かめる（P1-2 の なぜなぜ③ の2つ目の手当て）。
+
+---
+
+## P1-8: ルーター分割と依存性注入
+
+**作るもの**: `/todos` の5つを `app/routers/todos.py` に移し、`app/main.py` を**組み立てるだけ**の薄いファイルにする。`find_todo` は**依存（`Depends()`）**に変え、ハンドラは「欲しいもの」を引数に書くだけにする
+**重要度**: 🔴 毎日使う — 実務の FastAPI は必ずファイルが分かれていて、DB 接続（P3）も現在のユーザー（P4）も、この「依存」の形で受け取るため
+**前ステップとの接続**: P1-7 で `app/main.py` が 76 行になり、`find_todo(todo_id)` を3か所で呼んでいる。**動きは1つも変えずに**置き場所だけを変える。変えていないことは、仕様書の差分で証明する（8-6b）
+
+### 8-0. このステップの初出トークン
+
+| 系統 | トークン |
+| --- | --- |
+| **FastAPI** | `APIRouter(prefix=..., tags=...)` / `app.include_router()` / `Depends()`（3つ = 上限） |
+| **Python** | `TodoDep = Annotated[...]`（型に名前を付ける）/ モジュールを丸ごと import する（`from app.routers import todos` → `todos.router`）/ `NOT_FOUND: dict[int \| str, dict[str, str]]`（辞書に型を書く） |
+| **【道具】** | **パッケージと import の本番**（§4.3.1-2）: `ModuleNotFoundError` / 循環インポート / `__init__.py` の本当の役割 |
+| **周辺** | — |
+
+---
+
+### 8-1. コード
+
+**ファイルが4つ増える。** まず全体の形を見てから書く。
+
+```
+app/
+├── __init__.py
+├── main.py               ← アプリを作って、ルーターを取り付けるだけ（15行）
+├── store.py              ← 新規: TODO の置き場所と発券機（P3 で DB に置き換わる）
+├── dependencies.py       ← 新規: 「ID から TODO を探す」依存
+├── routers/
+│   ├── __init__.py       ← 新規: 空
+│   └── todos.py          ← 新規: /todos の5つのエンドポイント
+└── schemas/
+    ├── __init__.py
+    └── todo.py           ← 変更なし
+```
+
+#### 要件
+
+1. `app/store.py`: `todos` リストと `todo_ids` 発券機を `main.py` から**移す**
+2. `app/dependencies.py`: `find_todo` を **`get_todo`** という名前で移す（中身は同じ）。
+   さらに `TodoDep = Annotated[TodoRead, Depends(get_todo)]` を作る
+3. `app/routers/todos.py`: `router = APIRouter(prefix="/todos", tags=["todos"])` を作り、5つのエンドポイントを `@router.xxx` で書く
+   - パスは `prefix` を**除いた残り**を書く（一覧と作成は `""`、1件は `"/{todo_id}"`）
+   - 1件を扱う3つは、引数を `todo_id: int` ではなく **`todo: TodoDep`** にする（`find_todo` を呼ぶ行が消える）
+   - 404 の `responses=` は、**型を書いた変数**に入れて3か所で使い回す
+4. `app/main.py`: `/health` だけを残し、`app.include_router(todos.router)` で取り付ける
+5. **動きと仕様書が P1-7 と完全に同じ**であること（8-6b で確かめる）
+6. ruff / mypy が通る
+
+> 🔄 **素材からの変更**: 公式チュートリアルの「大きなアプリ」の章は、`from ..dependencies import ...` のような**相対 import**（`.` で今いる場所から数える書き方）を使っている。
+> 本教材は **`from app.dependencies import ...` の絶対 import** に統一する。どのファイルから見ても同じ書き方になり、ruff の import 並べ替えとも素直に噛み合うため。
+> **どちらも動く**。公式を読んで `..` を見かけても間違いではない。
+> 根拠: https://fastapi.tiangolo.com/tutorial/bigger-applications/#how-relative-imports-work
+
+#### 骨組み: `app/dependencies.py`
+
+```python
+from typing import Annotated
+
+from fastapi import Depends, HTTPException, status
+
+from app.schemas.todo import TodoRead
+from app.store import todos
+
+
+def get_todo(todo_id: int) -> TodoRead:
+    # TODO: P1-7 の find_todo と同じ中身
+    ...
+
+
+# TODO: TodoDep = Annotated[<受け取る型>, Depends(<呼んでほしい関数>)]
+```
+
+#### 骨組み: `app/routers/todos.py`（1件取得まで）
+
+```python
+from fastapi import APIRouter, status
+
+from app.dependencies import TodoDep
+from app.schemas.todo import TodoCreate, TodoRead
+from app.store import todo_ids, todos
+
+router = APIRouter()  # TODO: prefix と tags
+
+NOT_FOUND = {...}  # TODO: 型を書く（P1-7 の「やりがち」で mypy に止められた理由を思い出す）
+
+
+@router.post("")  # TODO: 201 / summary
+def create_todo(todo: TodoCreate) -> TodoRead:
+    ...
+
+
+@router.get("/{todo_id}")  # TODO: summary / responses
+def read_todo(todo: TodoDep) -> TodoRead:
+    # TODO: 1行だけ
+    ...
+```
+
+<details><summary>完成形（自分で書いてから開く）</summary>
+
+`app/store.py`（新規）
+
+```python
+from itertools import count
+
+from app.schemas.todo import TodoRead
+
+# 教材用の置き場所。サーバを止めると消える（P3 で MySQL に置き換える）
+todos: list[TodoRead] = []
+# 1, 2, 3, ... と番号を1枚ずつ出す発券機。消しても番号は戻らない
+todo_ids = count(1)
+```
+
+`app/dependencies.py`（新規）
+
+```python
+from typing import Annotated
+
+from fastapi import Depends, HTTPException, status
+
+from app.schemas.todo import TodoRead
+from app.store import todos
+
+
+def get_todo(todo_id: int) -> TodoRead:
+    for todo in todos:
+        if todo.id == todo_id:
+            return todo
+    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="TODO が見つかりません")
+
+
+# 「パスの todo_id で探した TODO」を受け取る、という宣言に名前を付けたもの
+TodoDep = Annotated[TodoRead, Depends(get_todo)]
+```
+
+`app/routers/__init__.py`（新規・空）
+
+`app/routers/todos.py`（新規）
+
+```python
+from fastapi import APIRouter, status
+
+from app.dependencies import TodoDep
+from app.schemas.todo import TodoCreate, TodoRead
+from app.store import todo_ids, todos
+
+router = APIRouter(prefix="/todos", tags=["todos"])
+
+NOT_FOUND: dict[int | str, dict[str, str]] = {
+    status.HTTP_404_NOT_FOUND: {"description": "指定した ID の TODO が無い"},
+}
+
+
+@router.post("", status_code=status.HTTP_201_CREATED, summary="TODO を1件作る")
+def create_todo(todo: TodoCreate) -> TodoRead:
+    new_todo = TodoRead(id=next(todo_ids), title=todo.title, done=todo.done)
+    todos.append(new_todo)
+    return new_todo
+
+
+@router.get("", summary="TODO 一覧を取得")
+def list_todos() -> list[TodoRead]:
+    return todos
+
+
+@router.get("/{todo_id}", summary="TODO を1件取得", responses=NOT_FOUND)
+def read_todo(todo: TodoDep) -> TodoRead:
+    return todo
+
+
+@router.put("/{todo_id}", summary="TODO を丸ごと置き換える", responses=NOT_FOUND)
+def update_todo(todo: TodoDep, body: TodoCreate) -> TodoRead:
+    todo.title = body.title
+    todo.done = body.done
+    return todo
+
+
+@router.delete(
+    "/{todo_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="TODO を削除する",
+    responses=NOT_FOUND,
+)
+def delete_todo(todo: TodoDep) -> None:
+    todos.remove(todo)
+```
+
+`app/main.py`（全文）
+
+```python
+from fastapi import FastAPI
+
+from app.routers import todos
+
+app = FastAPI()
+
+
+@app.get("/health", tags=["health"], summary="死活確認")
+def health() -> dict[str, str]:
+    return {"status": "ok"}
+
+
+app.include_router(todos.router)
+```
+
+（`create_todo` の docstring は紙幅のため省いた。残しておいてよい）
+
+</details>
+
+✅ 検証済み: Python 3.12.13 / FastAPI 0.141.1 / Pydantic 2.13.5 / jq 1.8.2。
+完成形を別の場所にコピーして `ruff check` = `All checks passed!`、`ruff format --check` = `8 files already formatted`、
+`mypy` = `Success: no issues found in 8 source files`。`curl` の結果は P1-7 と同じ（201 / 200 / 404 / 204）。
+
+> 💡 **P1-7 の「やりがち」の答え**: 変数に入れた辞書で mypy に止められたのは、中身から `dict[int, ...]` という**狭い型**が決まったから。
+> `NOT_FOUND: dict[int | str, dict[str, str]]` と**先に型を書いておけば**、mypy は FastAPI が求める形として読むので通る。
+
+---
+
+### 8-1b. 📊 図解
+
+#### (a) import は一方通行にする
+
+```mermaid
+flowchart TB
+    MAIN["main.py<br/>アプリを組み立てる"]
+    ROUTER["routers/todos.py<br/>エンドポイント"]
+    DEP["dependencies.py<br/>TODO を探す"]
+    STORE["store.py<br/>置き場所"]
+    SCHEMA["schemas/todo.py<br/>形"]
+    MAIN --> ROUTER
+    ROUTER --> DEP
+    ROUTER --> STORE
+    DEP --> STORE
+    STORE --> SCHEMA
+    DEP -.->|"❌ 逆向き<br/>循環インポート"| ROUTER
+```
+
+✅ 描画確認済み: mermaid 12.0.0 でパース通過。
+
+**矢印は「import している」向き。上から下へしか流れない。**
+点線の「`dependencies.py` が `routers/todos.py` から `todos` を import する」を足すと、**輪**ができて起動できなくなる（8-3a(2) で実際に起こす）。
+`store.py` を**一番下の独立したファイル**に切り出したのは、この輪を作らないため。
+
+#### (b) `Depends()` のとき、誰が何を呼ぶか
+
+```mermaid
+sequenceDiagram
+    participant C as curl
+    participant F as FastAPI
+    participant G as get_todo()
+    participant H as read_todo()
+
+    C->>F: GET /todos/99
+    F->>F: パスから todo_id=99 を取り出す
+    F->>G: get_todo(todo_id=99)
+    alt 見つかった
+        G-->>F: TodoRead の実物
+        F->>H: read_todo(todo=実物)
+        H-->>C: 200 + JSON
+    else 無い
+        G--xF: raise HTTPException(404)
+        F--xC: 404
+        Note over H: 呼ばれない
+    end
+```
+
+✅ 描画確認済み: mermaid 12.0.0 でパース通過。
+
+**`get_todo` を呼んでいるのは、あなたのコードではなく FastAPI。** `read_todo` の中には `get_todo` という文字が1つも無い。
+404 のとき、`read_todo` は**そもそも呼ばれない**（P1-7 では `read_todo` が呼ばれてから、中で 404 が投げられていた）。
+
+---
+
+### 8-2a. 🔤 入口の2行
+
+#### 🔤 `APIRouter(prefix="/todos", tags=["todos"])`
+**読み方**: 「エーピーアイ・ルーター、プレフィックス・イコール…、タグズ・イコール…」
+**要するに**: **支店の窓口一式**。窓口の住所の頭（`/todos`）と章分け（`todos`）を、窓口ごとに書かずに一度で決める。
+
+#### 🔤 `app.include_router(todos.router)`
+**読み方**: 「アップ・ドット・インクルード・ルーター」
+**要するに**: 支店を**本店に登録する**。登録しないと、支店の窓口はお客さんから見えない。
+
+#### 🔤 `Depends(get_todo)`
+**読み方**: 「ディペンズ・ゲット・トゥードゥー」
+**要するに**: 「**これを用意してから呼んで**」という注文。用意するのは FastAPI で、ハンドラは出来上がった物を受け取るだけ。
+
+---
+
+### 8-2. 🔬 仕組み解剖
+
+| 部品 | 正式名称 | 実行時に何が起きるか |
+| --- | --- | --- |
+| `APIRouter(prefix=, tags=)` | ルーター | `@router.get(...)` は `@app.get` と同じく**起動時に**経路の行を書くが、書き込み先は `app` ではなく**ルーターの表**。`prefix` と `tags` は、取り付けたときに全部の行に足される |
+| `app.include_router(router)` | ルーターの取り付け | **起動時に**ルーターの表を `app` に登録する。これを書かないと、ルーターの経路は**無いのと同じ**（404）。`prefix="/todos"` と `""` がつながって `/todos` になる |
+| `Annotated[TodoRead, Depends(get_todo)]` | 依存性（Dependency） | **起動時に** FastAPI が `get_todo` の引数も調べ、`todo_id` はパスにあるので path として扱う（**ハンドラの引数に無くても**仕様書の `parameters` に出る）。**リクエストごとに**、ハンドラより先に `get_todo(todo_id=...)` を呼び、戻り値を `todo` に入れてからハンドラを呼ぶ |
+
+**いつ評価されるか**: ルーターの表・取り付け・依存の調査はすべて起動時。`get_todo` を呼ぶのはリクエストごと（ハンドラの直前）。
+
+**どの道具の責務か**: 依存を調べて呼ぶ順番を決めるのは **FastAPI**。`get_todo` の中身と、`raise` による 404 は**あなたのコード**。
+`Annotated` の2枚目（`Depends(...)`）を読むのは FastAPI だけで、mypy は1枚目の `TodoRead` だけを見る（P1-3 の 3-3 と同じ）。
+
+**失敗したらどうなるか**: `get_todo` で `raise` すると、ハンドラは**呼ばれずに** 404（図 8-1b(b)）。
+
+**既知スタックとの対応**: NestJS の DI（コンストラクタに書いた型をフレームワークが用意する）や、Express のミドルウェアで `req.todo` に詰めてから次へ渡す形が近い。
+違いは、**関数の引数1つ単位で**「何が要るか」を書けることと、それが**型として mypy にも見える**こと（`req.todo` は型が付かない）。
+根拠: https://fastapi.tiangolo.com/tutorial/dependencies/#share-annotated-dependencies
+
+---
+
+### 8-3. 🐍 Python解説
+
+#### 🐍 `TodoDep = Annotated[TodoRead, Depends(get_todo)]`（型に名前を付ける）
+
+**読み方**: 「トゥードゥー・デップ・イコール・アノテイテッド…」
+
+**たとえ**: 長い注文を**あだ名で呼べるように**する。「パスの番号で探した TODO をください」と毎回言う代わりに、「いつものやつ」と言えば通じる。
+
+**正確には**:
+- `=` の右に**型**を置くと、左の名前はその型の**別名**になる（**型エイリアス**と呼ぶ）。`=` の使い方自体は P1-2 の代入と同じ
+- `todo: TodoDep` と書くのは、`todo: Annotated[TodoRead, Depends(get_todo)]` と書くのとまったく同じ意味
+- mypy から見れば `todo` は `TodoRead`。だから `todo.title` と書ける
+- 名前の最後を `Dep` にするのは、この教材での決まり（「依存で受け取る型」だと一目で分かるように）
+
+**TS なら**: `type TodoDep = ...` の型エイリアスが近い。違いは、**2枚目の札（`Depends`）を実行時に FastAPI が読む**こと。TS の型は実行時には消える。
+
+#### 🐍 `from app.routers import todos` → `todos.router`（モジュールを丸ごと import する）
+
+**正確には**:
+- これまでの `from app.schemas.todo import TodoCreate` は、ファイルの**中の名前**を1つ取り出していた
+- `from app.routers import todos` は、`app/routers/todos.py` という**ファイルそのもの**を `todos` という名前で取り出す
+- 中の名前は `todos.router` のように `.` で読む（P1-5 の「欄を読む `.`」と同じ形）
+
+⚠️ **同じ `todos` という名前が2つある**: `main.py` の `todos` は**ファイル**（`routers/todos.py`）、`routers/todos.py` の中の `todos` は **TODO のリスト**（`store.py` から来たもの）。
+**ファイルごとに名前の世界が分かれている**ので、ぶつからない。混乱したら、そのファイルの import 行を見れば、どちらの `todos` かが分かる。
+
+**TS なら**: `import * as todos from "./routers/todos"` が近い。
+
+#### 🐍 `NOT_FOUND: dict[int | str, dict[str, str]] = {...}`（辞書に型を書く）
+
+**正確には**: `変数名: 型 = 値`（P1-4 の `todos: list[TodoCreate] = []` と同じ形）。
+値だけを書くと mypy は**中身から一番狭い型**を決める（`{404: ...}` なら鍵は `int`）。**広い型を使いたいときは、先に型を書いて伝える。**
+`int | str` は「鍵は整数か文字列」（P1-3 の `|`）。FastAPI の `responses=` が、この広さの型を求めている。
+
+---
+
+### 8-3a. 🐍 Python の道具立て: パッケージと import の本番（§4.3.1-2）
+
+P1-2 の 2-3a(1) で「予告」だけした項目。**ファイルが分かれた今が本番。**
+
+#### (1) `ModuleNotFoundError` — 住所の書き間違い
+
+`main.py` の import を `app.router`（`s` 抜け）と打ち間違えると、起動時にこうなる（上のほうは省略）。
+
+```
+  File ".../app/main.py", line 3, in <module>
+    from app.router import todos
+ModuleNotFoundError: No module named 'app.router'
+```
+
+✅ 検証済み（実際に出した出力）。
+
+**読み方（下から）**: 一番下が「`app.router` という部品は無い」、その上が「`main.py` の3行目」。
+**直し方**: `app.router` を**フォルダの道順**に読み替えて（`app/router/` か `app/router.py`）、実際にあるか確かめる。今回は `app/routers/`。
+
+mypy も同じ間違いを**起動前に**見つける。
+
+```
+app/main.py:3: error: Cannot find implementation or library stub for module named "app.router"  [import-not-found]
+```
+
+✅ 検証済み。**コミットすれば pre-commit が止める**ので、この間違いは本番まで届かない。
+
+#### (2) 循環インポート — 輪になった import
+
+`todos` リストを `store.py` に分けず、**`routers/todos.py` に置いたまま**、`dependencies.py` から取りに行くと、こうなる。
+
+```
+  File ".../app/main.py", line 3, in <module>
+    from app.routers import todos
+  File ".../app/routers/todos.py", line 5, in <module>
+    from app.dependencies import TodoDep
+  File ".../app/dependencies.py", line 6, in <module>
+    from app.routers.todos import todos
+ImportError: cannot import name 'todos' from partially initialized module 'app.routers.todos' (most likely due to a circular import) (.../app/routers/todos.py)
+```
+
+✅ 検証済み（実際に出した出力。パスは `...` で短くした）。
+
+**読み方（下から）**:
+- 一番下: 「`app.routers.todos` から `todos` を取り出せない。**読み込みの途中**（partially initialized）のファイルだから。**たぶん輪になっている**（circular import）」
+- その上を3つ遡ると、**輪そのもの**が見える: `main.py` → `routers/todos.py`（5行目で `dependencies` を読みに行く）→ `dependencies.py`（6行目で `routers/todos` を読みに行く）→ **まだ5行目までしか読んでいない `routers/todos.py`**。`todos = []` は8行目なので、まだ存在しない
+
+**なぜ起きるか**: Python はファイルを**上から1行ずつ**実行して読み込む。読み込み途中のファイルを別のファイルが取りに来ると、**まだ実行していない行の名前は無い**。
+
+**直し方**: **両方が使うもの（`todos`）を、どちらでもない下のファイル（`store.py`）に移す**。図 8-1b(a) の矢印が一方通行になる。
+⚠️ **mypy はこれを見つけない**（`Success` になる。実際に確かめた）。mypy は「名前があるか」は見るが、「読み込む順番」は見ないため。**起動して初めて分かる。**
+
+#### (3) `__init__.py` の本当の役割 — **P1-2 の説明を訂正する**
+
+P1-2 では「`__init__.py` があると、そのフォルダはパッケージとして扱われ、`app.main` のように呼べる」と書いた。
+**実際に `app/routers/__init__.py` を消してみると、import も mypy も通る。**
+
+```
+import OK
+Success: no issues found in 7 source files
+```
+
+✅ 検証済み。
+
+**正確には**: 今の Python は、`__init__.py` が無いフォルダも「**名前空間パッケージ**」という別の種類のパッケージとして読める。
+これは本来、**1つのパッケージを複数の場所に分けて置く**ための仕組みで、「うっかり忘れても動く」のは副作用に近い。
+**この教材では `__init__.py` を置く**（「ここは1か所にまとまった部品置き場だ」と明示し、名前空間パッケージの特殊な振る舞いに頼らない）。
+根拠: https://docs.python.org/3.12/reference/import.html#regular-packages ／ https://docs.python.org/3.12/reference/import.html#namespace-packages
+
+> P1-2 の 2-3a(1) の「札」というたとえ自体は正しい（**普通の**パッケージの印）。「無いと呼べない」は言い過ぎだった。
+
+---
+
+### 8-3b. 🧩 周辺注
+
+このステップでは該当なし。
+
+---
+
+### 8-4. 解説 — なぜこう設計するか
+
+#### 🏛 設計パターン: 外から渡す
+
+**① 問題 — ハンドラが「探し方」を知っている**
+
+P1-7 の3つのハンドラは、どれも1行目で `todo = find_todo(todo_id)` を呼んでいた。今は困らないが、先を見ると困る。
+
+- **P3** で置き場所が MySQL になると、`find_todo` には **DB との接続（Session）** が要る。接続を**誰が作り、誰が閉じるか**を、3つのハンドラそれぞれが知ることになる
+- **P6** のテストで「DB の代わりに偽物の置き場所を使いたい」とき、ハンドラの中に `find_todo` が**直接書かれている**ので、差し替える場所が無い
+
+**② 解 — ハンドラは「何が要るか」だけを書き、用意は外に任せる**
+
+```python
+def read_todo(todo: TodoDep) -> TodoRead:
+    return todo
+```
+
+ハンドラには**探し方が1文字も無い**。「パスの ID の TODO が要る」とだけ書き、**FastAPI が `get_todo` を呼んで渡してくれる**。
+P3 で `get_todo` の中身が DB に変わっても、**ハンドラは1文字も変わらない**。P6 では `get_todo` を偽物に**外から差し替える**（`app.dependency_overrides`）。
+
+**③ 名前** — これには **「依存性注入」（Dependency Injection、DI）** という名前が付いている。
+**使う側は、使うものを自分で作らない。外から渡してもらう**、という考え方。
+
+**④ たとえ** — レストランの客は「カルボナーラ」と注文するだけで、卵をどこから仕入れるかは知らない。仕入れ先が変わっても、注文の仕方は変わらない。
+
+**⑤ 使わない判断**
+- **リクエストと関係ない、ただの計算**（税込み価格を出す、など）は、普通の関数として呼べばよい。`Depends` は「リクエストごとに FastAPI に呼ばせる」ための仕組みで、それ以外の場面では回り道になる
+- **1か所でしか使わず、差し替える予定も無い**処理を依存にすると、「どこで何が呼ばれているか」が読みにくくなるだけ（下の なぜなぜ③）
+
+#### 🪜 なぜなぜ: なぜ `Depends()` には「値」ではなく「関数」を渡すのか
+
+**なぜ① `Depends(get_todo)` と書くと、なぜ `todo_id` まで渡してもらえるのか**
+→ FastAPI は**起動時に**、ハンドラの引数だけでなく **`get_todo` の引数も**調べている。`todo_id: int` はパス `"/{todo_id}"` と同じ名前なので path（P1-3 の規則と同じ）。
+リクエストが来たら、パスから `todo_id` を取り出して**型を変換し**（`"99"` → `99`）、`get_todo(todo_id=99)` を呼ぶ。
+ハンドラの引数に `todo_id` が無いのに、仕様書の `parameters` に `todo_id` が出ているのは、**依存の引数も仕様書に含まれる**から（8-6b で確かめる）。
+根拠: https://fastapi.tiangolo.com/tutorial/dependencies/#integrated-with-openapi
+
+**なぜ② なぜ「探した TODO」そのものではなく、「探す関数」を渡すのか**
+→ **探した TODO は、リクエストごとに違う**から。起動時には、まだどの ID が来るか分からない。
+だから起動時には「**どうやって用意するか**」（関数）だけを預けておき、**いつ呼ぶか**はリクエストが来たときに FastAPI が決める。
+関数を預けているので、**預け先を差し替えるだけで**中身を丸ごと入れ替えられる（P6 の `dependency_overrides` はこれを使う）。
+
+**なぜ③ では、FastAPI に呼ばせる方式は何を失うのか** 🤔 まず自分で考える
+
+<details><summary>答え</summary>
+
+**「誰がいつ `get_todo` を呼んでいるか」が、コードを読んでも見えなくなる。**
+`read_todo` の中に `get_todo` という文字は無い。呼んでいるのは FastAPI で、**型の2枚目の札**にしか書かれていない。
+
+その結果、**書き忘れても誰も止めない**。`todo: TodoDep` のつもりで `todo: TodoRead` と書くと:
+
+- mypy は通る（1枚目の型は同じ `TodoRead` だから）
+- FastAPI は `TodoRead`（`BaseModel` の仲間）を見て、**ボディだと判定する**（P1-4 の規則）
+- 結果、`GET /todos/1` が **「ボディが無い」で 422** になる（8-6 の Q1 で実際に起こす）
+
+**手当て**（§4.2.1 ルール6）
+
+| 失うもの | 手当て | 扱う場所 |
+| --- | --- | --- |
+| 依存の書き忘れに気づけない | 仕様書を見る。`GET` なのに `requestBody` があれば書き忘れ | **P1-6** の読み方（8-6 の Q1） |
+| 同上を自動で見つけたい | 404 と 200 のケースをテストに書く | **P6** |
+| 依存がどこで呼ばれるか追いにくい | ブレークポイントを `get_todo` に張り、**ハンドラより先に止まる**のを見る | **P1-9** |
+
+</details>
+
+> 🧠 **FastAPI の考え方**: ハンドラは「**何が要るか**」を引数に書き、「**どう用意するか**」は依存に書く。
+> 用意の仕方が変わっても（メモリ → DB → テスト用の偽物）、ハンドラは変わらない。
+
+---
+
+### 8-5. 🏢 実務メモ ／ ⚠️ アンチパターン
+
+> 🏢 **実務メモ**: 依存を使う引数は `TodoDep = Annotated[...]` のように**名前を付けて使い回す**。
+> 同じ `Annotated[TodoRead, Depends(get_todo)]` を何か所にも書くと、差し替えたいときに全部を直すことになる。公式もこの形を勧めている。
+> 根拠: https://fastapi.tiangolo.com/tutorial/dependencies/#share-annotated-dependencies
+
+> ⚠️ **アンチパターン**: 404 の `responses=` を、`APIRouter(..., responses=...)` で**ルーター全体に**付ける。
+> 404 を返さない**作成と一覧にまで 404 が載り、仕様書が嘘になる**（8-6 の Q3 で実際に確かめる）。ルーター全体に付けてよいのは、**全部の窓口に本当に当てはまるもの**だけ。
+> 根拠: https://fastapi.tiangolo.com/tutorial/bigger-applications/#include-an-apirouter-with-a-custom-prefix-tags-responses-and-dependencies
+
+---
+
+### 8-6. 🔮 予測 → 動作確認
+
+**先に予想してから実行する。**
+
+1. `read_todo(todo: TodoDep)` を `read_todo(todo: TodoRead)` と書き間違えたら、`GET /todos/1` は何番か。mypy は止めるか
+2. 一覧のパスを `""` ではなく `"/"` にしたら（`@router.get("/")`）、`GET /todos` は何番か
+3. 404 の `responses=` を各エンドポイントではなく `APIRouter(..., responses=NOT_FOUND)` に付けたら、`POST /todos` の仕様書はどうなるか
+
+<details><summary>実行と結果</summary>
+
+**1 の答え: 422。mypy は止めない**
+
+```bash
+curl -sS -w '%{stderr}%{http_code}\n' http://127.0.0.1:8000/todos/1 | jq -c
+```
+```
+422
+{"detail":[{"type":"missing","loc":["body"],"msg":"Field required","input":null}]}
+```
+
+`loc` が `["body"]`。**`GET` なのにボディを要求している。** `TodoRead` を見た FastAPI が「ボディだ」と判定したから（P1-4 の 4-4 の規則）。
+仕様書を見ると、はっきり分かる。
+
+```bash
+curl -s http://127.0.0.1:8000/openapi.json \
+  | jq -c '.paths."/todos/{todo_id}".get | {parameters, requestBody}'
+```
+```json
+{"parameters":null,"requestBody":{"required":true,"content":{"application/json":{"schema":{"$ref":"#/components/schemas/TodoRead"}}}}}
+```
+
+`todo_id` が `parameters` から**消え**、代わりに `requestBody` が生えている。**`GET` に `requestBody` があったら、依存の書き忘れを疑う。**
+mypy は `Success`（`TodoDep` も `TodoRead` も、mypy から見れば同じ `TodoRead`）。
+
+**2 の答え: 405**
+
+```bash
+curl -sS -i http://127.0.0.1:8000/todos | head -4
+curl -s http://127.0.0.1:8000/openapi.json | jq -c '.paths | keys'
+```
+```
+HTTP/1.1 405 Method Not Allowed
+server: uvicorn
+allow: POST
+...
+["/health","/todos","/todos/","/todos/{todo_id}"]
+```
+
+`prefix="/todos"` と `"/"` がつながって、一覧は **`/todos/`**（末尾に `/`）になった。作成は `""` のままなので **`/todos`**。
+`GET /todos` は「パスはある（作成用）がメソッドが違う」で 405。`allow: POST` が「このパスで使えるのは POST だけ」と教えている（P1-2 の 405 と同じ読み方）。
+**`prefix` を付けたら、ルーター側のパスは `""` か `/` で始まる残りを書く。** 一覧と作成を同じ `/todos` にそろえるなら `""`。
+
+**3 の答え: `POST /todos` にも一覧にも 404 が載る**
+
+```bash
+curl -s http://127.0.0.1:8000/openapi.json | jq -c '.paths | map_values(map_values(.responses | keys))'
+```
+```json
+{"/health":{"get":["200"]},"/todos":{"get":["200","404"],"post":["201","404","422"]},"/todos/{todo_id}":{"get":["200","404","422"],"put":["200","404","422"],"delete":["204","404","422"]}}
+```
+
+作成と一覧は**絶対に 404 を返さない**のに、仕様書には「返すことがある」と書かれた。**P1-7 とは逆向きのズレ**（あちらは「返すのに書いていない」、こちらは「返さないのに書いてある」）。
+だから完成形では、`NOT_FOUND` を**必要な3か所にだけ**付けている。
+
+</details>
+
+✅ 検証済み（上の出力はすべて、完成形を1か所ずつ書き換えて実行して取得）。
+
+> ⚠️ **やりがち: `include_router` を書き忘れる**
+> `/todos` は **404**（`{"detail":"Not Found"}`）になる。経路表に登録されていないので、P1-2 の打ち間違いと同じ扱い。
+> しかも ruff が `` F401 `app.routers.todos` imported but unused ``（**使っていない import**）と言い、pre-commit の `ruff check --fix` は**その import 行を自動で消してしまう**。
+> エラーは消えるが、**`/todos` が無いアプリのままコミットされる**。ruff が「使っていない」と言ったら、**消す前に「本当は使うはずだったのでは」と疑う**。
+> ✅ 検証済み（ruff の出力と 404 を実際に出して確認）。
+
+---
+
+### 8-6b. 🧾 OpenAPI スキーマの差分
+
+**今回は「差分が無いこと」が合格の条件。** ファイルを分けて依存に変えただけで、**外から見た約束は1つも変えていない**ことを、機械に確かめさせる。
+
+**分ける前（P1-7 の状態）に**保存しておく。
+
+```bash
+uv run python -c "import json; from app.main import app; print(json.dumps(app.openapi()))" | jq -S . > /tmp/openapi-before.json
+```
+
+分けた後に、もう一度出して比べる。
+
+```bash
+uv run python -c "import json; from app.main import app; print(json.dumps(app.openapi()))" | jq -S . > /tmp/openapi-after.json
+diff /tmp/openapi-before.json /tmp/openapi-after.json && echo "差分なし"
+```
+```
+差分なし
+```
+
+✅ 検証済み（P1-7 の `app/` と P1-8 の完成形で実際に比べた。333 行が完全に一致）。
+
+- `jq -S` は**キーを並べ替えて**出す指定。並び順の違いで差分が出ないようにする
+- ハンドラから `todo_id` が消えたのに、`/todos/{todo_id}` の `parameters` には `todo_id` が**残っている**。依存（`get_todo`）の引数が仕様書に含まれるから（8-4 のなぜなぜ①）
+- `tags` は `APIRouter(tags=["todos"])` の1か所に書いただけで、5つ全部に `"todos"` が付いている
+- **この比べ方は、今後「動きを変えずに書き方だけ変える」たびに使える**（P3 で置き場所を DB に替えるときにも使う）
+
+#### 経路の一覧を「起動せずに」見る（P1-2 の なぜなぜ③ の2つ目の手当て）
+
+```bash
+uv run python -c "import json; from app.main import app; print(json.dumps(app.openapi()))" | jq -c '.paths | map_values(keys)'
+```
+```json
+{"/health":["get"],"/todos":["get","post"],"/todos/{todo_id}":["delete","get","put"]}
+```
+
+✅ 検証済み。
+
+**サーバを起動していない。** `app.main` を読み込むだけで、デコレータと `include_router` が実行され、経路表が埋まる（P1-2 の なぜなぜ①）。
+`prefix` がどう付いたかも、ここで確かめられる（8-6 の Q2 の `/todos/` もこれで見つかる）。
+
+> 🔄 **計画からの変更**: 計画では `app.routes` を読む予定だった。しかし FastAPI 0.141 では、`include_router` したルーターが
+> `app.routes` の中で**展開されず、1つのまとまりのまま**入っている（中の経路は FastAPI の内部用の仕組みを通さないと取り出せない。実際に確かめた）。
+> 内部の作りはバージョンで変わるので、**公開されている `app.openapi()` を使う**ことにした。
+> 仕様書に出さない経路（`include_in_schema=False`）はこの一覧に出ないが、この教材では使わない。
+
+---
+
+### 8-7. ✅ 想起チェック
+
+1. `APIRouter(prefix="/todos")` のルーターに `@router.get("/{todo_id}")` と書くと、実際のパスは何か
+2. `include_router` を書き忘れると何番になるか。そのとき ruff は何と言い、`--fix` は何をするか
+3. `todo: TodoDep` と `todo: TodoRead` は、mypy から見て違うか。FastAPI から見て違うか
+4. 循環インポートのエラーを見たら、どう直すか
+5. `read_todo` の引数に `todo_id` が無いのに、仕様書の `parameters` に `todo_id` が出るのはなぜか
+
+<details><summary>答え</summary>
+
+1. **`/todos/{todo_id}`**。`prefix` とパスがそのままつながる
+2. **404**。ruff は「`app.routers.todos` を import しているのに使っていない」（F401）と言い、`--fix` は**その import を消す**。エラーは消えるが、`/todos` の無いアプリになる
+3. **mypy から見ると同じ**（どちらも `TodoRead`）。**FastAPI から見ると違う**: `TodoDep` は「依存で用意する」、`TodoRead` は「ボディから読む」
+4. **両方が使っているものを、どちらでもない下のファイルに移す**（今回は `todos` を `store.py` へ）。import の矢印を一方通行にする
+5. **依存（`get_todo`）の引数も、FastAPI が起動時に調べて仕様書に含めるから**
+</details>
+
+---
+
+### 8-8. 初出トークンの回収確認
+
+| トークン | 扱い |
+| --- | --- |
+| `APIRouter(prefix=, tags=)` | 8-2a / 8-2 で仕組み解剖 / 8-6 の Q2（`prefix` と `"/"`）/ Q3（ルーター全体の `responses=`） |
+| `include_router()` | 8-2a / 8-2 / 8-6 のやりがち（書き忘れと ruff の `--fix`） |
+| `Depends()` | 8-2a / 8-2 / 8-1b(b) の図 / 8-4 の 🏛 設計パターン（外から渡す）と なぜなぜ / 8-6 の Q1 |
+| 型エイリアス（`TodoDep = ...`） | 8-3 で Python解説 / 8-5 実務メモ |
+| モジュールを丸ごと import | 8-3 で Python解説（同じ `todos` という名前の区別つき） |
+| 辞書に型を書く | 8-3 で Python解説（**P1-7 の「やりがち」を回収**） |
+| パッケージと import の本番 | 8-3a(1)〜(3)（`ModuleNotFoundError` / 循環インポート / `__init__.py`）。**P1-2 の ⏭️ を回収**し、P1-2 の説明の言い過ぎを訂正 |
+| 経路の一覧を起動せずに見る | 8-6b（`app.openapi()`。**P1-2 なぜなぜ③ の2つ目の手当てを回収**。`app.routes` から変更） |
+| 3回書いた `responses=` | 8-1 で型付きの変数に（**P1-7 の ⏭️ を回収**） |
+
+**未回収: 0件**（新しい `⏭️` は、P3 の DB 差し替えと P6 の `dependency_overrides`。どちらも計画どおり）
+
+---
+
+### 8-9. 📌 進捗の更新
+
+`README.md` の進捗表 P1b を「**P1-8 完了**（5ステップ中3）」、次の一手を `M1: P1 ステップ9` に更新した。
+
+**次のステップ**: P1-9「Zed からブレークポイントで止める」。`.zed/debug.json` を書き、`debugpy` で起動したサーバに Zed から接続する。
+`POST /todos` を止めて**変数ペインでボディの中身を見る**のが合格の条件。8-4 のなぜなぜ③の手当てとして、`get_todo` に張ったブレークポイントが**ハンドラより先に止まる**ことも確かめる。
+Zed の画面操作は生成側では実行できないので、`🧑 読者が検証` の手順と判定基準を書く。
+
+---
+
+## P1-9: Zed からブレークポイントで止める
+
+**作るもの**: `.zed/debug.json`。iTerm2 で `debugpy` 付きでサーバを起動し、Zed から**接続（attach）**して、`POST /todos` を**止めてボディの中身を見る**
+**重要度**: 🔴 毎日使う — `print` を足して再起動する往復が消える。P1-8 で「見えなくなった呼び出し」（依存）も、止めれば順番が見える
+**前ステップとの接続**: P1-8 の なぜなぜ③ で「`get_todo` がいつ呼ばれるかはコードを読んでも見えない」と書き、**手当ては P1-9** とした。ここで、`get_todo` が**ハンドラより先に**止まるのを自分の目で見る
+
+### 9-0. このステップの初出トークン
+
+| 系統 | トークン |
+| --- | --- |
+| **FastAPI** | —（新しい FastAPI の API は無い） |
+| **Python** | —（文法の追加は無い） |
+| **【道具】** | `python -Xfrozen_modules=off -m debugpy --listen 5678 --wait-for-client -m uvicorn ...` / `.zed/debug.json`（`adapter` / `request: "attach"` / `connect`）/ ブレークポイント / 変数ペイン |
+| **周辺** | — |
+
+> このステップは**コードを1行も変えない**。足すのは設定ファイル1つと、起動コマンド1つ。
+
+---
+
+### 9-1. コード
+
+#### (1) デバッグ用の起動コマンド（iTerm2 で打つ）
+
+```bash
+uv run python -Xfrozen_modules=off -m debugpy --listen 5678 --wait-for-client \
+  -m uvicorn app.main:app --port 8000
+```
+
+**`--reload` が付いていない**ことに注意（理由は 9-6 の Q3）。普段の開発はこれまでどおり `--reload` 付きで起動し、**デバッグするときだけこちら**を使う。
+
+✅ 検証済み: macOS / Python 3.12.13 / debugpy 1.8.22 / uvicorn 0.53.0。
+接続する前は**ポート 8000 が開かない**（`--wait-for-client` で待っている）こと、接続した後に `Uvicorn running on ...` が出ることを確認した（9-6 の Q1）。
+
+#### (2) `.zed/debug.json`（新規）
+
+**要件**
+
+1. プロジェクト直下に `.zed/debug.json` を作る。中身は**設定の配列**（`[ ... ]`）
+2. 設定は1つ。名前（`label`）は `"Attach to FastAPI"`
+3. アダプタは Python 用の **`Debugpy`**、種類は **`attach`**（動いているサーバに後から接続する）
+4. 接続先は `127.0.0.1` の `5678`（上の `--listen 5678` と同じ番号）
+5. 作業フォルダはプロジェクト直下、**自分のコードだけで止まる**設定を付ける
+
+<details><summary>完成形（自分で書いてから開く）</summary>
+
+```json
+[
+  {
+    "label": "Attach to FastAPI",
+    "adapter": "Debugpy",
+    "request": "attach",
+    "connect": { "host": "127.0.0.1", "port": 5678 },
+    "cwd": "$ZED_WORKTREE_ROOT",
+    "justMyCode": true
+  }
+]
+```
+
+</details>
+
+🧑 読者が検証（Zed がこのファイルを読めるかは、生成側では確かめられない。手順と判定基準は 9-6 の後半）。
+キー名の根拠: 置き場所と `adapter` / `label` / `request` は Zed のデバッガの章、`Debugpy` / `cwd: "$ZED_WORKTREE_ROOT"` / `justMyCode` は Python の章。
+**接続先の `connect` は、Zed の Debugpy アダプタのソースで確認した**（`"request": "attach"` のとき `connect` の `host` / `port` を読み、`python -m debugpy.adapter connect ...` を起動する）。
+根拠: https://zed.dev/docs/debugger#configuration-files ／ https://zed.dev/docs/languages/python ／ https://github.com/zed-industries/zed/blob/main/crates/dap_adapters/src/python.rs
+
+> ⚠️ **はまりどころ（教材の最初の版はここを間違えていた）**: Zed のデバッガの章の汎用の例にある **`tcp_connection` を使うと失敗する**。
+> ```
+> error: process exited before debugger attached.
+> ```
+> 🧑 読者の環境で実際に出たエラー。
+> `tcp_connection` は「**Zed が起動するデバッグ用の中継役（アダプタ）に、どの番号で待たせるか**」の指定で、「動いているサーバへの接続先」ではない。
+> 5678 を指定すると、中継役が 5678 を開こうとして、**iTerm2 の debugpy がすでに使っているので落ちる**（`OSError: [Errno 48] Address already in use` を手元で再現して確認した）。
+> **動いているサーバへの接続先は `connect` に書く**（VS Code の `launch.json` と同じキー名）。Zed の Python の章には attach の例が無い（2026-09 時点）ので、ソースで確かめた。
+
+> 💡 `.zed/debug.json` は**コミットする**（§10.1）。チームの誰が開いても同じ設定で接続できるようにするため。
+
+---
+
+### 9-1b. 📊 図解
+
+#### (a) 誰が誰に接続しているか
+
+```mermaid
+sequenceDiagram
+    participant T as iTerm2（debugpy + uvicorn）
+    participant Z as Zed
+    participant C as curl
+    participant H as create_todo()
+
+    T->>T: 5678 で待ち受け。アプリはまだ起動しない
+    Z->>T: 5678 に接続（attach）+ ブレークポイントの位置を渡す
+    T->>T: アプリを起動（8000 が開く）
+    C->>T: POST /todos
+    T->>H: 呼ぶ
+    H-->>Z: ブレークポイントで停止を通知
+    Note over C: 応答が返らず待たされる
+    Z->>T: 続行（F5 など）
+    T-->>C: 201
+```
+
+✅ 描画確認済み: mermaid 12.0.0 でパース通過。
+
+**Zed はサーバを起動していない。** 起動は iTerm2、Zed は**後から電話をかけて**「この行に来たら止めて」と頼むだけ。
+止まっている間、`curl` は**返事を待たされたまま**になる。これが「本当に止まっている」証拠。
+
+#### (b) `--reload` を付けると、なぜだめか
+
+```mermaid
+flowchart TB
+    DBG["debugpy"]
+    PARENT["親: ファイルの見張り役<br/>（アプリは動いていない）"]
+    CHILD["子: アプリ本体<br/>（保存のたびに作り直し）"]
+    Z["Zed"]
+    Z -->|接続| DBG
+    DBG --> PARENT
+    PARENT -->|起動| CHILD
+    DBG -.->|"子にも接続してほしい<br/>（応じなければ子は待ちっぱなし）"| Z
+```
+
+✅ 描画確認済み: mermaid 12.0.0 でパース通過。
+
+**`--reload` を付けると、アプリ本体は「子」の別プロセスで動く。** Zed が最初に接続したのは「親」（見張り役）で、そこにアプリのコードは無い。
+debugpy は「子にも接続して」と頼んでくるが、**それに応じるかどうかはエディタ次第**。応じなければ子は待ったままで、リクエストが返らない（9-6 の Q3 で実測）。
+応じたとしても、**ファイルを保存するたびに子は作り直され**、接続が切れる。だから**デバッグ中は `--reload` を外す**。
+
+---
+
+### 9-2a. 🔤 入口の2行
+
+#### 🔤 `python -m debugpy --listen 5678 --wait-for-client -m uvicorn app.main:app`
+**読み方**: 「パイソン・マイナスエム・デバッグパイ、リッスン・ごーろくななはち、ウェイト・フォー・クライアント、マイナスエム・ユビコーン…」
+**要するに**: いつもの uvicorn の起動を、**デバッガという付き添いを付けて**行う。付き添いは 5678 番で電話を待ち、つながるまでアプリを起動しない。
+
+#### 🔤 `"request": "attach"` + `"connect"`
+**読み方**: 「リクエスト・アタッチ」「コネクト」
+**要するに**: Zed の側から「**もう動いているもの**に、この番号で電話をかける」という設定。自分で起動する（`launch`）のではない。
+
+---
+
+### 9-2. 🔬 仕組み解剖
+
+| 部品 | 正式名称 | 何が起きるか |
+| --- | --- | --- |
+| `-m debugpy` | debugpy（Python 用のデバッグサーバ） | Python の中に**デバッガを先に読み込んでから**、後ろの `-m uvicorn ...` を実行する。**アプリ側のコードは1行も変えない**。1つ目の `-m` は Python への「このモジュールを実行して」、2つ目の `-m` は debugpy への「その後にこれを実行して」 |
+| `--listen 5678` | 待ち受け | 5678 番でエディタからの接続を待つ。**番号だけ書くと `127.0.0.1`**（自分の Mac の中からだけ）で待つ |
+| `--wait-for-client` | 接続待ち | エディタがつながるまで、**アプリの起動そのものを止めておく**。起動直後の処理でも止められるようにするため |
+| `-Xfrozen_modules=off` | Python の起動オプション | Python 3.12 は標準部品の一部を**あらかじめ固めた形**で持っていて、デバッガが「ブレークポイントを取りこぼすかもしれない」と警告を出す。これを外して警告を消す（自分のコードで止まることは、付けても付けなくても確認した） |
+| `.zed/debug.json` の `attach` | デバッグ設定 | Zed は**デバッグの共通のやり取りの決まり**（DAP: Debug Adapter Protocol）で debugpy と話す。「この行で止めて」「今の変数を見せて」「続けて」を送り合う |
+
+**どの道具の責務か**: 止めるのも変数を集めるのも **debugpy**（Python の中にいる）。Zed は**頼んで、見せるだけ**。uvicorn と FastAPI は、止められていることを知らない。
+
+**既知スタックとの対応**: Node の `node --inspect-brk app.js` + VS Code の attach がほぼ同じ形。`--inspect-brk` の「最初で止めて待つ」が、`--wait-for-client` にあたる。
+
+> 🧩 **この構成が一番簡単な理由**（§2.5）: アプリを**ローカルで直接**動かしているので、Zed が見ているファイルと、動いているファイルが**同じ場所**にある。
+> アプリをコンテナに入れると、コンテナの中のパスと手元のパスの対応表（`pathMappings`）が要る。**DB だけコンテナ**（P2）にしたのは、これを避ける意味もある。
+
+---
+
+### 9-3. 🐍 Python解説 ／ 9-3a. 道具立て ／ 9-3b. 周辺注
+
+新しい文法は無い。道具は 9-2 の表で扱った。
+
+---
+
+### 9-4. 解説 — なぜこう設計するか
+
+#### 🪜 なぜなぜ: なぜ Zed に起動させず（launch）、起動済みのサーバに接続する（attach）のか
+
+**なぜ① attach のとき、何が起きているのか**
+→ サーバは iTerm2 で、**いつもとほぼ同じコマンド**で起動する。違いは頭に `-m debugpy --listen 5678` が付くことだけ。
+Zed は 5678 番に接続して、ブレークポイントの位置を渡す。**起動と接続が別々の手順**になっている（図 9-1b(a)）。
+
+**なぜ② なぜ Zed の設定に起動コマンドを書かないのか（launch のほうが1手で済むのでは）**
+→ **起動のしかたが2か所に分かれる**から。launch にすると、`--port` や `app.main:app` を `.zed/debug.json` にも書くことになり、
+普段の起動コマンドと**片方だけ直す事故**が起きる（P1-2 から繰り返している「2か所に書くとズレる」）。
+attach なら、Zed が知っているのは「**どこに電話をかけるか**」だけ。さらに、**ログがいつもの iTerm2 に出続ける**ので、止まっている間も `INFO: ...` の行を見比べられる。
+根拠: https://zed.dev/docs/debugger#attaching-processes
+
+**なぜ③ では、attach 方式は何を払っているのか** 🤔 まず自分で考える
+
+<details><summary>答え</summary>
+
+3つ払っている。
+
+| 払っているもの | 具体的に | 手当て |
+| --- | --- | --- |
+| **手順が2つになる** | 起動 → 接続。接続を忘れると、`--wait-for-client` のせいで**アプリが起動しないまま**（9-6 の Q1） | 起動したら iTerm2 に何も出ないのが正常、と覚えておく。**起動コマンドを README に書いておく**（このステップの 9-9） |
+| **`--reload` と一緒に使えない** | 保存のたびの自動再起動が無くなる（9-6 の Q3） | **コマンドを2つ使い分ける**: 普段は `--reload`、止めたいときだけデバッグ用。この教材では**手当てはこれだけ** |
+| **ポートを1つ占有する** | 5678 が使われていると起動できない。テストにも接続したくなると衝突する | **P6-4** でテスト用に 5679 を別に用意する（§2.5） |
+
+</details>
+
+> 🧠 **考え方**: デバッガは「**動いているものに後から付き添う**」もの。起動のしかたは普段と同じに保ち、付き添いだけを足し外しする。
+
+---
+
+### 9-5. 🏢 実務メモ ／ ⚠️ アンチパターン
+
+> 🏢 **実務メモ**: `--listen` には**番号だけ**を書く（`127.0.0.1` で待つ）。`0.0.0.0:5678` のように書くと、**同じネットワークの誰からでも**デバッガに接続でき、
+> デバッガは**好きなコードを実行できる**ので、そのままサーバを乗っ取れてしまう。公式も、`127.0.0.1` 以外で待つと外から入れるようになると警告している。
+> 根拠: https://github.com/microsoft/debugpy/wiki/Command-Line-Reference
+
+> ⚠️ **アンチパターン**: `--reload` を付けたままデバッガを付ける。アプリ本体が子プロセスに移り、止まらない・リクエストが返らない・保存のたびに接続が切れる（図 9-1b(b)、9-6 の Q3）。
+> 根拠: https://uvicorn.dev/settings/#development
+
+---
+
+### 9-6. 🔮 予測 → 動作確認
+
+**先に予想してから読む。** Q1〜Q3 は、Zed と**同じやり取り（DAP）を送る小さなスクリプト**で生成側が確かめた。Zed の画面での確認は、その後の 🧑 の手順で行う。
+
+1. デバッグ用のコマンドで起動した直後、まだ Zed から接続していないとき、`curl http://127.0.0.1:8000/health` はどうなるか
+2. `get_todo` の `for` の行と、`read_todo` の `return todo` の行の**両方**にブレークポイントを張って `GET /todos/1` を送ると、**どちらが先に**止まるか
+3. `--reload` を付けたまま起動して接続し、`POST /todos` を送ると、どうなるか
+
+<details><summary>実行と結果</summary>
+
+**1 の答え: つながらない（ポートが開いていない）**
+
+```
+  5678 (debugpy): 待ち受け中
+  8000 (uvicorn): なし
+curl: (7) Failed to connect to 127.0.0.1 port 8000 after 0 ms: Couldn't connect to server
+```
+
+`--wait-for-client` なので、**接続されるまで uvicorn はまだ起動していない**。iTerm2 にも `Uvicorn running on ...` は出ない。
+**「起動したのに何も出ない」は正常。** Zed から接続した瞬間に、次の行が出る。
+
+```
+INFO:     Started server process [3753]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
+```
+
+**2 の答え: `get_todo` が先**
+
+`POST /todos`（`create_todo` の1行目）と `GET /todos/1` で、止まった場所とそのときの変数:
+
+```
+== POST /todos
+  STOPPED at /app/routers/todos.py:16 in create_todo
+    todo = TodoCreate(title='牛乳を買う', done=False)  (TodoCreate)
+== GET /todos/1
+  STOPPED at /app/dependencies.py:10 in get_todo
+    todo_id = 1  (int)
+  STOPPED at /app/routers/todos.py:28 in read_todo
+    todo = TodoRead(id=1, title='牛乳を買う', done=False)  (TodoRead)
+```
+
+- `POST` では、`todo` に**検証を通った後の `TodoCreate`** が入っている（入口の門の後。P1-4）
+- `GET` では、**`get_todo` → `read_todo` の順**に止まった。`get_todo` の `todo_id` は**もう整数の `1`**（文字列の `"1"` ではない。変換は FastAPI が済ませている。P1-3）
+- `read_todo` の `todo` には、**`get_todo` が返した `TodoRead`** が入っている。P1-8 の図 8-1b(b) のとおり
+
+**3 の答え: 止まらない。リクエストが返ってこない**
+
+```
+== POST /todos
+    HTTP POST /todos -> <urlopen error [Errno 60] Operation timed out>
+  (止まらなかった)
+== 受け取った通知（event）
+  process name=.../site-packages/uvicorn/__init__.py pid=5637
+  debugpyAttach subProcessId=5722 name=Subprocess 5722
+  debugpyAttach subProcessId=5723 name=Subprocess 5723
+```
+```
+INFO:     Started reloader process [5637] using WatchFiles
+```
+
+接続できたのは **pid 5637 の見張り役（reloader）**。アプリ本体は**子プロセス**（5722 / 5723）で動き、debugpy は「子にも接続して」（`debugpyAttach`）と頼んできた。
+確認用のスクリプトはこの依頼に応じないので、**子は接続を待ったまま**になり、リクエストがタイムアウトした（3回試して、2回がタイムアウト、1回は子が起動できず接続拒否。**結果すら安定しない**）。
+Zed がこの依頼に応じるかは生成側では確かめられないが、応じたとしても**保存のたびに子は作り直される**。どちらにしても `--reload` は外す。
+
+</details>
+
+✅ 検証済み: Python 3.12.13 / debugpy 1.8.22。Zed の代わりに DAP で接続するスクリプトで実行して取得（パスは短くした）。
+検証のときは、あなたが 8000 番で動かしていたサーバと衝突しないよう、**debugpy を 5690、アプリを 8090** にして実行した。上の出力は、番号だけを教材の 5678 / 8000 に読み替えて載せている。
+`-Xfrozen_modules=off` の有り無しで2回ずつ実行し、4回とも3か所で止まることを確認（有りのときだけ警告が消える）。
+
+#### Zed で止める — 🧑 読者が検証
+
+**Zed の画面操作は生成側では実行できない**ので、手順と判定基準を書く（§4.6(c)、§2.5 の判定基準）。
+
+**準備**: iTerm2 のペインを縦に2つに分ける。左でサーバ、右で `curl` を打つ。
+
+1. `app/routers/todos.py` の `create_todo` の1行目（`new_todo = ...`）の**行番号の左**をクリックして、ブレークポイント（赤い丸）を付ける
+2. 左のペインで、9-1 (1) のデバッグ用コマンドで起動する。**何も出ずに止まっている**ことを確かめる（Q1）
+3. Zed で **`F4`**（またはコマンドパレットで `debugger: start`）→ **`Attach to FastAPI`** を選ぶ。左のペインに `Uvicorn running on ...` が出れば接続できている
+4. 右のペインで作成を送る
+   ```bash
+   curl -sS -w '%{stderr}%{http_code}\n' -X POST http://127.0.0.1:8000/todos \
+     -H 'Content-Type: application/json' -d '{"title":"牛乳を買う"}' | jq -c
+   ```
+   → **`curl` が返ってこない**（止まっている）
+5. **判定基準**: Zed のデバッグパネルの変数の一覧に **`todo`** があり、開くと **`title: '牛乳を買う'`** と **`done: False`** が見える
+6. Zed で続行する（デバッグパネルの続行ボタン）→ 右のペインに `201` と JSON が返る
+7. **（なぜなぜの手当て）** `app/dependencies.py` の `get_todo` の `for` の行と、`read_todo` の `return todo` の行にもブレークポイントを付け、
+   `curl -sS http://127.0.0.1:8000/todos/1 | jq -c` を送る。**判定基準**: 先に **`get_todo`** で止まり、変数に **`todo_id: 1`**（整数）が見える。続行すると次に `read_todo` で止まり、`todo` に中身が入っている
+
+**5 と 7 まで確認できて、このステップは完了**（§2.5: 「接続できた」で終わらせない）。
+
+**スクリーンショット**: 手順5の状態で、**エディタの止まっている行（ハイライトされた行）と、変数の一覧で `todo` を開いたところ**が両方入る範囲を撮り、
+`docs/images/p1-9-zed-breakpoint.png` に保存する。
+
+![Zed で create_todo の1行目に止まり、変数の一覧で todo の title と done が見えている画面](images/p1-9-zed-breakpoint.png)
+
+> ⚠️ **止まらないとき**に確かめる順番
+> 1. 左のペインのコマンドに **`--reload` が付いていないか**（Q3）
+> 2. `Uvicorn running on ...` が出ているか（出ていなければ接続できていない。`.zed/debug.json` の `port` と `--listen` の番号が同じか）
+> 3. ブレークポイントを付けたファイルが、**起動したプロジェクトと同じ場所**のファイルか
+
+---
+
+### 9-6b. 🧾 OpenAPI スキーマの差分
+
+**差分なし。** `app/` を1文字も変えていないので、仕様書も変わらない（P1-8 の 8-6b の `diff` で確かめられる）。
+`.zed/debug.json` はエディタの設定で、アプリからは見えない。
+
+---
+
+### 9-7. ✅ 想起チェック
+
+1. デバッグ用のコマンドで起動しても iTerm2 に何も出ないのはなぜか
+2. `--listen 5678` と `--listen 0.0.0.0:5678` は何が違うか。どちらを使うか
+3. `--reload` を付けたままだと止まらないのはなぜか
+4. `GET /todos/1` で `get_todo` と `read_todo` のどちらが先に止まるか。`get_todo` の `todo_id` は文字列か整数か
+5. `.zed/debug.json` の接続先を `tcp_connection` に書くと、何が起きるか。なぜか
+
+<details><summary>答え</summary>
+
+1. **`--wait-for-client` で、Zed が接続するまでアプリの起動を止めているから。** 接続した瞬間に `Uvicorn running on ...` が出る
+2. 番号だけなら **`127.0.0.1`（自分の Mac の中からだけ）**。`0.0.0.0` は**同じネットワークの誰からでも**接続でき、デバッガ経由でコードを実行されうる。**番号だけを使う**
+3. **アプリ本体が子プロセスで動き、Zed が接続したのは親（見張り役）だから。** しかも保存のたびに子は作り直される
+4. **`get_todo` が先。** `todo_id` は**整数の `1`**（FastAPI が変換を済ませてから呼ぶ）
+5. **`error: process exited before debugger attached.` で失敗する。** `tcp_connection` は Zed が起動する中継役の待ち受け番号で、5678 を書くと iTerm2 の debugpy と番号がぶつかって中継役が落ちる。接続先は **`connect`** に書く
+</details>
+
+---
+
+### 9-8. 初出トークンの回収確認
+
+| トークン | 扱い |
+| --- | --- |
+| デバッグ用の起動コマンド | 9-1 / 9-2a / 9-2（`-m` が2つある理由、`-Xfrozen_modules=off`）/ 9-6 の Q1 |
+| `.zed/debug.json`（`attach` / `connect`） | 9-1（公式の章と Zed のソースで確認したキー。`tcp_connection` で失敗した実例つき）/ 9-2a / 🧑 の手順 |
+| ブレークポイント / 変数の一覧 | 9-6 の Q2（DAP で実測）/ 🧑 の手順5・7 |
+| `--reload` を外す理由 | 9-1b(b) / 9-5 / 9-6 の Q3（実測。§2.5 の記述を「止まらない」から「リクエストが返らない」に具体化） |
+| 依存の呼ばれる順番 | 9-6 の Q2 / 🧑 の手順7（**P1-8 のなぜなぜ③ の手当てを回収**） |
+| テスト用のデバッグ | ⏭️ **P6-4**（ポート 5679） |
+
+**未回収: 0件**（`⏭️` は P6-4 の1件。計画どおり）
+
+---
+
+### 9-9. 📌 進捗の更新
+
+`README.md` の進捗表 P1b を「**P1-9 完了**（5ステップ中4）」、次の一手を `M1: P1 ステップ10` に更新した。
+README の「メモ」に、**デバッグ用の起動コマンド**を1行足した（9-4 のなぜなぜ③の手当て）。
+
+**次のステップ**: P1-10「欄をまたぐ条件を書く」（v11 で追加）。`TodoCreate` に `start_date` / `due_date` を足し、`model_validator` で**開始日 > 期日を 422** にする。
+`field_validator` で `title` の前後の空白を落とす。**バリデータの中にブレークポイントを張り、ハンドラより先に止まる**のを、このステップの Zed で確かめる。
+P1-3 の なぜなぜ③ で約束した「2つの値をまたぐ条件」の回収。

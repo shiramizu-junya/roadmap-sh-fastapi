@@ -16,6 +16,8 @@ FastAPI / Pydantic / SQLAlchemy / Alembic / pytest の API を、**1項目1行**
 | `uv` | ユー・ブイ | 部品の買い出し係。`.venv` に入れて管理する | **P1-1 / 1-2a** |
 | `ruff` | ラフ | 書き方の見張り番。間違い探しと見た目揃えの両方 | **P1-1 / 1-2a** |
 | `mypy` | マイ・パイ | 型の見張り番。動かす前に型の食い違いを見る | **P1-1 / 1-2a** |
+| `python -m debugpy --listen 5678 --wait-for-client -m uvicorn ...` | デバッグパイ | デバッガ付きで起動。**Zed がつながるまでアプリは起動しない**。`--reload` は付けない | **P1-9 / 9-2a** |
+| `.zed/debug.json`（`request: "attach"` / `connect`） | ゼッド・デバッグ | 動いているサーバに電話をかける設定。**`tcp_connection` ではない**（使うと `process exited before debugger attached`） | **P1-9 / 9-2a** |
 | `pre-commit` | プリ・コミット | コミット直前に見張り番を呼ぶ係 | **P1-1 / 1-2a** |
 | `[tool.ruff]` | ツール・ラフ | `pyproject.toml` の中の ruff の取り分 | **P1-1 / 1-2** |
 | `repo: local` | リポ・ローカル | フックを取ってこず、この環境の道具を使う指定 | **P1-1 / 1-2** |
@@ -64,6 +66,10 @@ FastAPI / Pydantic / SQLAlchemy / Alembic / pytest の API を、**1項目1行**
 | `raise HTTPException(status_code=..., detail=...)` | エイチティーティーピー・エクセプション | 途中で打ち切って番号と一言を返す非常ボタン。`detail` は文字列のまま出る | **P1-7 / 7-2a** |
 | `status.HTTP_404_NOT_FOUND` | ステータス定数 | 番号の名札。**打ち間違いは mypy も止めない** | **P1-7 / 7-2** |
 | `responses={404: {...}}` | レスポンシズ | 仕様書に「この失敗もある」と書き足す。動きは変えない | **P1-7 / 7-2a** |
+| `APIRouter(prefix="/todos", tags=[...])` | エーピーアイ・ルーター | 支店の窓口一式。パスの頭と章分けを一度で決める。パスは `""` か `/...` | **P1-8 / 8-2a** |
+| `app.include_router(router)` | インクルード・ルーター | 支店を本店に登録。**忘れると 404、ruff の `--fix` が import を消す** | **P1-8 / 8-2a** |
+| `Annotated[T, Depends(f)]` | ディペンズ | 「これを用意してから呼んで」。FastAPI が `f` を呼んで渡す。**書き忘れるとボディ扱い** | **P1-8 / 8-2a** |
+| `app.openapi()`（起動せずに） | アップ・ドット・オープンエーピーアイ | 経路の一覧と仕様書を、サーバ無しで取り出す。`diff` で書き換え前後を比べられる | **P1-8 / 8-6b** |
 | `jq '.a."/b"'` / `keys` / `-c` / `-r` | ジェイキュー | JSON をたどって一部を取り出す。記号を含むキーは `""` で囲む | **P1-6 / 6-2b** |
 
 ## pytest

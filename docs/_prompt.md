@@ -229,7 +229,8 @@ JWT とパスワードハッシュのライブラリは、**FastAPI 公式のセ
 | **`fastapi` CLI**（`fastapi dev` / `fastapi run`） | サブコマンドは `dev` と `run` の2つだけで、実質 `uvicorn` のラッパー。**`uvicorn` を直接叩くほうが「何が起きているか」を隠さない**（§4.10）。`fastapi[standard]` を足すと依存も増える。M3 の「カバーしていないこと」に回す |
 
 > **ルート一覧の確認について**: `fastapi` CLI に `routes` のようなサブコマンドは**無い**。
-> 一覧は `app.routes` を読めば追加インストール無しで出せるので、**P1-8（ルーター分割の回）で扱う**。
+> 一覧は `app.openapi()` を読めば追加インストール無しで、起動もせずに出せるので、**P1-8（ルーター分割の回）で扱う**。
+> （当初は `app.routes` の予定だったが、FastAPI 0.141 では `include_router` したルーターが展開されずに入っているため変更した）
 > P1-2 の なぜなぜ③ で「一覧性を失う」と提示した代償の、2つ目の手当てにあたる（§4.2.1 ルール6）。
 
 ### 2.5 デバッグ環境（Zed + iTerm2 / attach 方式）★
@@ -265,15 +266,17 @@ iTerm2 に特別な設定は要らない。ペインを縦に分割し、左で�
     "label": "Attach to FastAPI",
     "adapter": "Debugpy",
     "request": "attach",
-    "tcp_connection": { "host": "127.0.0.1", "port": 5678 },
+    "connect": { "host": "127.0.0.1", "port": 5678 },
     "cwd": "$ZED_WORKTREE_ROOT",
     "justMyCode": true
   }
 ]
 ```
 
-> ⚠️ **はまりどころ**: VS Code の `connect` ではなく **`tcp_connection`** を使う。
-> VS Code の `launch.json` をそのまま持ってくると接続タイムアウトになる、という報告が複数ある。
+> ⚠️ **はまりどころ（v11 で訂正）**: 動いているサーバへの接続先は **`connect`**（VS Code と同じキー名）。
+> 以前ここには「`connect` ではなく `tcp_connection`」と書いていたが**逆だった**。`tcp_connection` は Zed が起動する中継役（アダプタ）の待ち受け番号の指定で、
+> 5678 を書くと iTerm2 の debugpy と番号がぶつかり `error: process exited before debugger attached.` になる（P1-9 で読者の環境で発生）。
+> 根拠: https://github.com/zed-industries/zed/blob/main/crates/dap_adapters/src/python.rs
 
 **このスニペットは出発点であり、検証済みではない。** Zed のデバッガは変更が続いているため、
 P1 のステップでは**必ず公式ドキュメントで現行のキー名を確認し**、根拠URLを残したうえで
@@ -415,7 +418,7 @@ FastAPI はそれを `Union` 型やバリデータで**宣言として書かせ�
 > 不安だけが残る。**実務では、その弱点を別の手段で埋めているのが普通**。
 > 埋め方まで示して初めて「使える」になる。
 > 例: P1-2 で「経路を関数の真上に貼ると**一覧性**を失う」と書いたら、
-> 「`/openapi.json` で取り戻す（P1-6）」「`app.routes` で確認する（P1-8）」まで書く。
+> 「`/openapi.json` で取り戻す（P1-6）」「`app.openapi()` で起動せずに確認する（P1-8）」まで書く。
 
 > **なぜ3段か**: 1段（「〜のためです」）は暗記にしかならない。2段で仕組みの理由に届き、3段で**代償**が見える。
 > 代償が見えて初めて「いつ使わないか」が判断できる。これが「知っている」と「使える」の境目。

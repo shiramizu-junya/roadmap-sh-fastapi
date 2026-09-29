@@ -326,7 +326,7 @@ flowchart LR
 | --- | --- | --- | --- | --- |
 | P1-6 | **生成された仕様書を読む** | `/openapi.json` を `jq` で読み解く。`/docs` で Try it out | `GET /openapi.json`, `components.schemas` と `$ref`, `tags=` / `summary=` | 🔴 |
 | P1-7 | 残りの CRUD と 404 | `GET /todos/{id}` `PUT` `DELETE` が揃う。**P1-5 の `id = len(todos) + 1` が DELETE で重なるのを予測問題で踏む** | `HTTPException`, `status` 定数, `responses=`（スキーマへの宣言） | 🔴 |
-| P1-8 | ルーター分割と依存性注入 | `app/routers/todos.py` に切り出し、共通処理を注入。**`__init__.py` と import がここで本番**。**`app.routes` で経路一覧を確認**（`prefix` の付き方を目で見る） | `APIRouter`, `include_router()`, `Depends()` | 🔴 |
+| P1-8 | ルーター分割と依存性注入 | `app/routers/todos.py` に切り出し、共通処理を注入。**`__init__.py` と import がここで本番**。**`app.openapi()` で経路一覧を起動せずに確認**（`prefix` の付き方を目で見る。FastAPI 0.141 では `app.routes` に `include_router` の中身が展開されないため変更） | `APIRouter`, `include_router()`, `Depends()` | 🔴 |
 | P1-9 | Zed からブレークポイントで止める | `.zed/debug.json`。`POST /todos` を止めてボディを覗く | —（debugpy / attach） | 🔴 |
 | P1-10 | **欄をまたぐ条件を書く** | `TodoCreate` に `start_date` / `due_date` を足し、**開始日 > 期日を 422** にする。`title` の前後の空白を落とし、空白だけなら弾く。**バリデータの中にブレークポイントを張り、ハンドラより前で止まる**のを見る | `field_validator`, `model_validator(mode="after")`, 検証中の `ValueError` → 422（`value_error`） | 🔴 |
 
@@ -347,7 +347,7 @@ flowchart LR
 > P3-1 の `Annotated[Session, Depends(...)]` は2度目の登場となり、1行の復習で済む（§4.3）。
 
 > **P1-8 でルート一覧の確認を扱う。** P1-2 の なぜなぜ③ で「経路を関数の真上に貼ると**一覧性**を失う」と提示した。
-> 手当ては2つあり、**P1-6** が `/openapi.json`（起動して見る）、**P1-8** が `app.routes`（起動せずに見る）。
+> 手当ては2つあり、**P1-6** が `/openapi.json`（起動して見る）、**P1-8** が `app.openapi()`（起動せずに見る）。
 > ルーターに分割すると経路がファイルをまたぐので、`include_router(prefix=...)` の付け間違いはここで一番起きやすい。
 > `fastapi` CLI は使わない（`dev` と `run` しか無く、`routes` のようなコマンドは存在しない。§2.4）。
 

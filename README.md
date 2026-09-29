@@ -38,7 +38,7 @@ docs/_prompt.md を読んで、M0 を実行して
 | Ph | 内容 | 状態 | プロジェクト |
 |---|---|---|---|
 | P1a | 品質ゲート + FastAPI 基礎（ルーティング / Pydantic） | **完了**（M2 まで） | — |
-| P1b | OpenAPI と Swagger UI の読み方 / DI / デバッガ / バリデータ | **P1-7 完了**（5ステップ中2） | — |
+| P1b | OpenAPI と Swagger UI の読み方 / DI / デバッガ / バリデータ | **P1-9 完了**（5ステップ中4） | — |
 | P2 | 環境と設定（Docker MySQL / pydantic-settings） | 未着手 | — |
 | P3 | ORM で永続化（SQLAlchemy 2.0 / Alembic） | 未着手 | — |
 | P4 | 認証・認可（OAuth2 + JWT）+ リレーションと N+1 | 未着手 | PJ1 |
@@ -47,7 +47,7 @@ docs/_prompt.md を読んで、M0 を実行して
 | P7 | 非同期に書き換える（async def / AsyncSession / lifespan） | 未着手 | — |
 | 総仕上げ | — | 未着手 | PJ3 |
 
-**次の一手**: `M1: P1 ステップ8`（ルーター分割と依存性注入）
+**次の一手**: `M1: P1 ステップ10`（欄をまたぐ条件を書く）
 
 教材は `docs/p1a-basics.md`（P1a と M2）、P1b からは `docs/p1b-openapi.md`。
 
@@ -57,3 +57,7 @@ docs/_prompt.md を読んで、M0 を実行して
 - ブランクページ再現は**翌日**にやる
 - ステップごとにコミットする
 - エラーが出たら 15 分は自分で粘ってから聞く
+- サーバの起動は2種類を使い分ける（P1-9）
+  - 普段: `uv run uvicorn app.main:app --port 8000 --reload`
+  - デバッグ: `uv run python -Xfrozen_modules=off -m debugpy --listen 5678 --wait-for-client -m uvicorn app.main:app --port 8000`
+    （`--reload` は付けない。起動しても何も出ないのが正常で、Zed の `F4` → `Attach to FastAPI` で動き出す）
